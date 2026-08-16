@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+      containers:
+        # ── dsh web (loopback only; the gate is the only ingress) ───────────
+        - name: dsh-web
+          image: "{{ .Values.image.dshWeb }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - web
+            - --host
+            - 127.0.0.1
+            - --port
+            - "{{ .Values.dshWeb.port }}"
+            {{- range .Values.dshWeb.trustedHosts }}
+            - --trusted-host
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: DSH_TELEMETRY_DISABLED
+              value: "1"
+          ports:
+            - containerPort: {{ .Values.dshWeb.port }}
+              name: dsh-web
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+        # ── OIDC gate (sidecar, forwards to dsh-web) ────────────────────────
+        - name: auth-gate
+          image: "{{ .Values.image.authGate }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: GATE_PORT
+              value: "3080"
+            - name: GATE_UPSTREAM
+              value: "http://127.0.0.1:{{ .Values.dshWeb.port }}"
+            - name: OIDC_ISSUER
+              value: {{ .Values.auth.oidcIssuer | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidcClientId | quote }}
+            - name: OIDC_REDIRECT_URI
+              value: {{ .Values.auth.redirectUri | quote }}
+            - name: ADMIN_GROUPS
+              value: {{ .Values.auth.adminGroups | quote }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "auth.oidcClientSecretRef required" .Values.auth.oidcClientSecretRef }}
+                  key: oidc-client-secret
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "auth.sessionSecretRef required" .Values.auth.sessionSecretRef }}
+                  key: session-secret
+          ports:
+            - containerPort: 3080
+              name: auth-gate
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,29 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tlsSecret }}
+  tls:
+    - hosts:
+        - {{ required "ingress.host required" $.Values.ingress.host }}
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.host required" .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "dsh-control-plane.fullname" . }}
+                port:
+                  name: http
+{{- end }}

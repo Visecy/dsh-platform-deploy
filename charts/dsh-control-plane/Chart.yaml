@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dsh-control-plane
+description: dsh-platform control plane (OIDC gate + dsh web)
+type: application
+version: 0.1.0
+appVersion: "0.1.0-rc.6"

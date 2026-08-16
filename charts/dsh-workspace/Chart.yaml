@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dsh-workspace
+description: dsh-platform workspace execution pod (sandbox daemon) — runtime configuration reference
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

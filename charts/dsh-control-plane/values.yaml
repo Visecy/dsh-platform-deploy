@@ -1,0 +1,33 @@
+# dsh-control-plane values
+replicaCount: 1
+
+image:
+  dshWeb: runzhliu/deepseek-harness:0.1.0-rc.6
+  authGate: visecy/dsh-auth-gate:0.1.0
+  pullPolicy: IfNotPresent
+
+# dsh web listen (container-internal loopback; the gate is the only ingress)
+dshWeb:
+  port: 3000
+  # public authority(ies) the /api trust fence accepts (--trusted-host)
+  trustedHosts: []
+
+auth:
+  oidcIssuer: ""
+  oidcClientId: ""
+  redirectUri: ""
+  adminGroups: "dsh-admins"
+  # secret refs
+  oidcClientSecretRef: ""
+  sessionSecretRef: ""
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tlsSecret: ""
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

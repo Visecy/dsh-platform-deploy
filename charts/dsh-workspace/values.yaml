@@ -1,0 +1,42 @@
+# dsh-workspace: runtime configuration for workspace execution pods.
+#
+# NOTE: workspace pods are created dynamically by the control plane's
+# lifecycle manager (dsh-workspace-k8s ensure/attach). This chart is the
+# configuration REFERENCE that maps to the manager's options, plus the
+# per-workspace PVC and NetworkPolicy defaults. It is not meant to be
+# installed directly.
+
+image: visecy/dsh-sandbox-daemon:0.1.0
+daemonPort: 4390
+
+# workspace volume (created per workspace by the manager)
+storage:
+  storageClassName: ""
+  size: 10Gi
+
+# RuntimeClass for isolation escalation: "" (runc default) -> gvisor -> kata
+runtimeClassName: ""
+
+securityContext:
+  runAsUser: 1000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilitiesDrop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+# Which namespaces may reach workspace daemons (control plane).
+controlPlaneNamespaces:
+  - dsh-platform
+
+# Optional egress allowlist for workspace pods (cluster API servers, registries...)
+egress:
+  enabled: false
+  cidrs: []

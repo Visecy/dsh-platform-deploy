@@ -1,0 +1,9 @@
+This chart is a configuration reference for workspace execution pods.
+Workspace pods are created dynamically by the control plane lifecycle manager.
+
+Manager mapping (dsh-workspace-k8s config):
+  image            -> values.image
+  daemonPort       -> values.daemonPort
+  storageClassName -> values.storage.storageClassName
+  storageSize      -> values.storage.size
+  resources        -> values.resources

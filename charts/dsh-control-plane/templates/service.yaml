@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
+  ports:
+    - name: http
+      port: 3080
+      targetPort: auth-gate
