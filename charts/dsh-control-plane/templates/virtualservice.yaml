@@ -1,0 +1,19 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+spec:
+  gateways:
+    - {{ .Values.istio.gateway }}
+  hosts:
+    - {{ required "istio.host required" .Values.istio.host }}
+  http:
+    - route:
+        - destination:
+            host: {{ include "dsh-control-plane.fullname" . }}
+            port:
+              number: 3080
+{{- end }}
