@@ -37,3 +37,8 @@ istio:
   enabled: false
   gateway: istio-system/internal-gateway
   host: ""
+# Istio exposure (preferred: *.svc.visecy.top via internal-gateway)
+istio:
+  enabled: false
+  gateway: istio-system/internal-gateway
+  host: ""
