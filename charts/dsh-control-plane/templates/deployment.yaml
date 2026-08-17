@@ -14,6 +14,8 @@ spec:
       labels:
         app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull
       securityContext:
         runAsNonRoot: true
         fsGroup: 1000
@@ -39,6 +41,7 @@ spec:
             - containerPort: {{ .Values.dshWeb.port }}
               name: dsh-web
           securityContext:
+            runAsUser: 1000
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -77,6 +80,7 @@ spec:
             - containerPort: 3080
               name: auth-gate
           securityContext:
+            runAsUser: 1000
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
