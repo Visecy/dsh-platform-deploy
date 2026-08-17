@@ -14,6 +14,7 @@ spec:
       labels:
         app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
     spec:
+      serviceAccountName: {{ include "dsh-control-plane.fullname" . }}
       imagePullSecrets:
         - name: ghcr-pull
       securityContext:
@@ -38,19 +39,18 @@ spec:
               P=/home/node/.dsh/profiles/web
               # first run initializes the profile (manifest + pnpm workspace root)
               dsh --profile web --dump-config > /dev/null 2>&1 || true
-              mkdir -p "$P/node_modules/@visecy/dsh-auth-oidc"
               # cat redirect (not cp): ConfigMap files are 0444; cp would inherit the
               # read-only mode and block re-runs of this init on CrashLoop/restart
-              cat /dsh-plugins/auth-oidc-plugin.js > "$P/node_modules/@visecy/dsh-auth-oidc/index.js"
-              cat > "$P/node_modules/@visecy/dsh-auth-oidc/package.json" << 'EOF'
-              {
-                "name": "@visecy/dsh-auth-oidc",
-                "version": "0.1.0",
-                "type": "module",
-                "main": "index.js",
-                "exports": { ".": "./index.js" }
+              install_plugin() {
+                local name="$1" file="$2" pkg="$3"
+                mkdir -p "$P/node_modules/@visecy/$name"
+                cat "/dsh-plugins/$file" > "$P/node_modules/@visecy/$name/index.js"
+                cat "/dsh-plugins/$pkg" > "$P/node_modules/@visecy/$name/package.json"
               }
-              EOF
+              install_plugin dsh-auth-oidc auth-oidc-plugin.js pkg-auth-oidc.json
+              install_plugin dsh-fs-k8s fs-k8s.js pkg-fs-k8s.json
+              install_plugin dsh-subprocess-k8s subprocess-k8s.js pkg-subprocess-k8s.json
+              install_plugin dsh-workspace-k8s workspace-k8s.js pkg-workspace-k8s.json
               corepack pnpm --dir "$P" --store-dir /tmp/pnpm-store add -w dsh-web-auth@0.1.0 @kubernetes/client-node
               cat /dsh-plugins/cordis.patch.yml > "$P/cordis.patch.yml"
               echo "plugin install done"

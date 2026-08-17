@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}-workspaces
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+rules:
+  # workspace execution pods + headless services + PVCs, all in this namespace
+  - apiGroups: [""]
+    resources: ["pods", "pods/status", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}-workspaces
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dsh-control-plane.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "dsh-control-plane.fullname" . }}-workspaces
+  apiGroup: rbac.authorization.k8s.io
