@@ -23,7 +23,7 @@ spec:
         # ── dsh web (loopback only; the gate is the only ingress) ───────────
         - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: Always
           args:
             - web
             - --host
@@ -45,6 +45,8 @@ spec:
               mountPath: /home/node/.dsh
             - name: dsh-home
               mountPath: /workspace
+            - name: dsh-tmp
+              mountPath: /tmp
           securityContext:
             runAsUser: 1000
             allowPrivilegeEscalation: false
@@ -57,7 +59,7 @@ spec:
         # ── OIDC gate (sidecar, forwards to dsh-web) ────────────────────────
         - name: auth-gate
           image: "{{ .Values.image.authGate }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: Always
           env:
             - name: GATE_PORT
               value: "3080"
@@ -94,6 +96,8 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: dsh-home
+          emptyDir: {}
+        - name: dsh-tmp
           emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
