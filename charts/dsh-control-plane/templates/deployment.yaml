@@ -40,6 +40,11 @@ spec:
           ports:
             - containerPort: {{ .Values.dshWeb.port }}
               name: dsh-web
+          volumeMounts:
+            - name: dsh-home
+              mountPath: /home/node/.dsh
+            - name: dsh-home
+              mountPath: /workspace
           securityContext:
             runAsUser: 1000
             allowPrivilegeEscalation: false
@@ -87,6 +92,9 @@ spec:
               drop: ["ALL"]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: dsh-home
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
