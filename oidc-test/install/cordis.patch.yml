@@ -1,0 +1,20 @@
+- id: webserver
+  disabled: true
+- insert:
+    - id: webserver-gated
+      name: 'dsh-web-auth'
+      inject: [webStartup]
+      config:
+        host: !!js ctx.webStartup.host ?? '127.0.0.1'
+        port: !!js ctx.webStartup.port ?? 3080
+    - id: dsh-auth-oidc
+      name: '@visecy/dsh-auth-oidc'
+      config:
+        oidc:
+          issuer: !!js process.env.OIDC_ISSUER
+          clientId: !!js process.env.OIDC_CLIENT_ID
+          clientSecret: !!js process.env.OIDC_CLIENT_SECRET
+          redirectUri: !!js process.env.OIDC_REDIRECT_URI
+          scopes: [openid, profile, email, groups]
+        sessionSecret: !!js process.env.SESSION_SECRET
+        adminGroups: !!js (process.env.ADMIN_GROUPS ?? 'dsh-admins').split(',')
