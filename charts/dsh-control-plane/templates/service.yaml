@@ -11,4 +11,4 @@ spec:
   ports:
     - name: http
       port: 3080
-      targetPort: auth-gate
+      targetPort: dsh-web

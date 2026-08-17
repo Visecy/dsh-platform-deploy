@@ -13,7 +13,7 @@ spec:
       args:
         - "--context=tar:///context/context.tar.gz"
         - "--dockerfile=docker/dsh-auth-gate.Dockerfile"
-        - "--destination=ghcr.io/visecy/dsh-auth-gate:0.1.0"
+        - "--destination=ghcr.io/visecy/dsh-auth-gate:0.2.0"
         - "--registry-mirror=docker.1panel.live"
         - "--cache=false"
       env:

@@ -3,12 +3,11 @@ replicaCount: 1
 
 image:
   dshWeb: runzhliu/deepseek-harness:0.1.0-rc.6
-  authGate: visecy/dsh-auth-gate:0.1.0
   pullPolicy: IfNotPresent
 
-# dsh web listen (container-internal loopback; the gate is the only ingress)
+# dsh web listen (public; in-process OIDC gate via dsh-web-auth fork)
 dshWeb:
-  port: 3000
+  port: 3080
   # public authority(ies) the /api trust fence accepts (--trusted-host)
   trustedHosts: []
 
@@ -32,11 +31,6 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Istio exposure (preferred: *.svc.visecy.top via internal-gateway)
-istio:
-  enabled: false
-  gateway: istio-system/internal-gateway
-  host: ""
 # Istio exposure (preferred: *.svc.visecy.top via internal-gateway)
 istio:
   enabled: false

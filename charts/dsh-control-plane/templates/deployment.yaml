@@ -19,15 +19,66 @@ spec:
       securityContext:
         runAsNonRoot: true
         fsGroup: 1000
+      initContainers:
+        # ── plugin installer: pnpm-safe profile setup (dsh-web-auth fork +
+        #    @visecy/dsh-auth-oidc in-process OIDC gate) ──────────────────────
+        - name: plugin-install
+          image: "{{ .Values.image.dshWeb }}"
+          imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              export HOME=/home/node
+              export DSH_HOME=/home/node/.dsh
+              export PNPM_HOME=/tmp/pnpm
+              export COREPACK_HOME=/tmp/corepack
+              export XDG_DATA_HOME=/tmp/xdg
+              P=/home/node/.dsh/profiles/web
+              # first run initializes the profile (manifest + pnpm workspace root)
+              dsh --profile web --dump-config > /dev/null 2>&1 || true
+              mkdir -p "$P/node_modules/@visecy/dsh-auth-oidc"
+              # cat redirect (not cp): ConfigMap files are 0444; cp would inherit the
+              # read-only mode and block re-runs of this init on CrashLoop/restart
+              cat /dsh-plugins/auth-oidc-plugin.js > "$P/node_modules/@visecy/dsh-auth-oidc/index.js"
+              cat > "$P/node_modules/@visecy/dsh-auth-oidc/package.json" << 'EOF'
+              {
+                "name": "@visecy/dsh-auth-oidc",
+                "version": "0.1.0",
+                "type": "module",
+                "main": "index.js",
+                "exports": { ".": "./index.js" }
+              }
+              EOF
+              corepack pnpm --dir "$P" --store-dir /tmp/pnpm-store add -w dsh-web-auth@0.1.0 @kubernetes/client-node
+              cat /dsh-plugins/cordis.patch.yml > "$P/cordis.patch.yml"
+              echo "plugin install done"
+          env:
+            - name: DSH_TELEMETRY_DISABLED
+              value: "1"
+          volumeMounts:
+            - name: dsh-home
+              mountPath: /home/node/.dsh
+            - name: dsh-tmp
+              mountPath: /tmp
+            - name: dsh-plugins
+              mountPath: /dsh-plugins
+          securityContext:
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
       containers:
-        # ── dsh web (loopback only; the gate is the only ingress) ───────────
+        # ── dsh web with in-process OIDC gate (no sidecar) ────────────────────
         - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
           imagePullPolicy: Always
           args:
             - web
-            - --host
-            - 127.0.0.1
             - --port
             - "{{ .Values.dshWeb.port }}"
             {{- range .Values.dshWeb.trustedHosts }}
@@ -37,34 +88,6 @@ spec:
           env:
             - name: DSH_TELEMETRY_DISABLED
               value: "1"
-          ports:
-            - containerPort: {{ .Values.dshWeb.port }}
-              name: dsh-web
-          volumeMounts:
-            - name: dsh-home
-              mountPath: /home/node/.dsh
-            - name: dsh-home
-              mountPath: /workspace
-            - name: dsh-tmp
-              mountPath: /tmp
-          securityContext:
-            runAsUser: 1000
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-
-        # ── OIDC gate (sidecar, forwards to dsh-web) ────────────────────────
-        - name: auth-gate
-          image: "{{ .Values.image.authGate }}"
-          imagePullPolicy: Always
-          env:
-            - name: GATE_PORT
-              value: "3080"
-            - name: GATE_UPSTREAM
-              value: "http://127.0.0.1:{{ .Values.dshWeb.port }}"
             - name: OIDC_ISSUER
               value: {{ .Values.auth.oidcIssuer | quote }}
             - name: OIDC_CLIENT_ID
@@ -84,8 +107,15 @@ spec:
                   name: {{ required "auth.sessionSecretRef required" .Values.auth.sessionSecretRef }}
                   key: session-secret
           ports:
-            - containerPort: 3080
-              name: auth-gate
+            - containerPort: {{ .Values.dshWeb.port }}
+              name: dsh-web
+          volumeMounts:
+            - name: dsh-home
+              mountPath: /home/node/.dsh
+            - name: dsh-home
+              mountPath: /workspace
+            - name: dsh-tmp
+              mountPath: /tmp
           securityContext:
             runAsUser: 1000
             allowPrivilegeEscalation: false
@@ -99,6 +129,10 @@ spec:
           emptyDir: {}
         - name: dsh-tmp
           emptyDir: {}
+        - name: dsh-plugins
+          configMap:
+            name: {{ include "dsh-control-plane.fullname" . }}-plugins
+            defaultMode: 0444
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

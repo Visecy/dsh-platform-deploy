@@ -10,8 +10,8 @@ spec:
       app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
   policyTypes: [Ingress]
   ingress:
-    # the gate (3080) is reachable from the cluster (ingress/port-forward);
-    # dsh-web (3000) stays loopback-only inside the pod.
+    # dsh web (3080) is reachable from the cluster (ingress/port-forward);
+    # no other ports are exposed.
     - ports:
         - protocol: TCP
           port: 3080

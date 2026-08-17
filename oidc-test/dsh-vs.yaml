@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: dsh-control-plane
+  namespace: dsh-platform
+spec:
+  gateways:
+    - istio-system/internal-gateway
+  hosts:
+    - dsh.svc.visecy.top
+  http:
+    - route:
+        - destination:
+            host: dsh-control-plane-dsh-control-plane.dsh-platform.svc.cluster.local
+            port:
+              number: 3080

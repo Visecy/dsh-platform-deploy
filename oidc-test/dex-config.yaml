@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex-config
+  namespace: dsh-oidc-test
+data:
+  config.yaml: |
+    issuer: https://oidc-test.svc.visecy.top/dex
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    telemetry:
+      http: 0.0.0.0:5558
+    logger:
+      level: debug
+    oauth2:
+      responseTypes: ["code"]
+      skipApprovalScreen: true
+    staticClients:
+      - id: dsh-platform
+        name: dsh platform
+        redirectURIs:
+          - 'https://dsh.svc.visecy.top/auth/callback'
+        secret: test-client-secret
+    enablePasswordDB: true
+    staticPasswords:
+      - email: 'admin@test.local'
+        # bcrypt hash of 'test-password'
+        hash: '$2a$10$4jEXmpGlsf9Ok35v3WhSCOWgMcDGuMRb0qp8lnzTwAHw2sBdXzIci'
+        username: 'admin'
+        userID: '08a8684b-db88-4b73-ae95-2ed29688f4f3'
+      - email: 'reader@test.local'
+        hash: '$2a$10$4jEXmpGlsf9Ok35v3WhSCOWgMcDGuMRb0qp8lnzTwAHw2sBdXzIci'
+        username: 'reader'
+        userID: 'a5c46a8e-9d6a-4c3e-b4a2-6f1b3d2e9c10'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: dsh-oidc-test
+  labels:
+    app: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dex
+  template:
+    metadata:
+      labels:
+        app: dex
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.42.0
+          command: ["/usr/local/bin/dex", "serve", "/etc/dex/config.yaml"]
+          ports:
+            - containerPort: 5556
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex
+          readinessProbe:
+            httpGet:
+              path: /dex/healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: dex-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: dsh-oidc-test
+spec:
+  selector:
+    app: dex
+  ports:
+    - port: 5556
+      targetPort: http
+      name: http
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: dex
+  namespace: dsh-oidc-test
+spec:
+  gateways:
+    - istio-system/internal-gateway
+  hosts:
+    - oidc-test.svc.visecy.top
+  http:
+    - route:
+        - destination:
+            host: dex.dsh-oidc-test.svc.cluster.local
+            port:
+              number: 5556

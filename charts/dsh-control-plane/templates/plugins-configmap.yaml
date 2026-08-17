@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}-plugins
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+data:
+  auth-oidc-plugin.js: |-
+{{ .Files.Get "files/auth-oidc-plugin.js" | indent 4 }}
+  cordis.patch.yml: |-
+{{ .Files.Get "files/cordis.patch.yml" | indent 4 }}
