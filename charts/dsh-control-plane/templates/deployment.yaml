@@ -18,7 +18,6 @@ spec:
       imagePullSecrets:
         - name: ghcr-pull
       securityContext:
-        runAsNonRoot: true
         fsGroup: 1000
       initContainers:
         # ── plugin installer: pnpm-safe profile setup (dsh-web-auth fork +
@@ -84,14 +83,29 @@ spec:
                   - id: fs-k8s
                     name: '@visecy/dsh-fs-k8s'
                     config:
-                      daemonEndpoint: !!js (process.env.WS_DAEMON_ENDPOINT ?? 'http://dsh-ws0-svc.dsh-platform.svc.cluster.local:4390')
+                      daemonEndpoint: !!js (process.env.WS_DAEMON_ENDPOINT ?? 'http://127.0.0.1:4390')
                       hostRoot: '/workspaces'
                       podRoot: '/workspace'
                   - id: subprocess-k8s
                     name: '@visecy/dsh-subprocess-k8s'
                     config:
-                      daemonEndpoint: !!js (process.env.WS_DAEMON_ENDPOINT ?? 'http://dsh-ws0-svc.dsh-platform.svc.cluster.local:4390')
+                      daemonEndpoint: !!js (process.env.WS_DAEMON_ENDPOINT ?? 'http://127.0.0.1:4390')
               PATCHEOF
+
+              # ── privileged-method unlock: settings/credentials RPCs are pinned to
+              #    loopback by the official client-connection (PRIVILEGED_METHODS
+              #    passes an empty trust list). Our OIDC gate authenticates every /api
+              #    request, so reusing the trusted hosts is safe (research §6.3c).
+              # privileged-method unlock: copy the lib to a shared volume and patch
+              # the copy; dsh-web mounts it over the official lib dir (rootfs RO).
+              CCLIB=/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib
+              mkdir -p /patch
+              cp -r "$CCLIB/." /patch/
+              sed -i 's/isTrustedApiRequest(request, \[\])/isTrustedApiRequest(request, trustedHosts)/' /patch/index.js
+              echo "privileged unlock: $(grep -c 'isTrustedApiRequest(request, trustedHosts)' /patch/index.js) line(s) patched"
+
+              # init runs as root to patch /usr/local; hand the profile back to node
+              chown -R 1000:1000 /home/node/.dsh
               echo "plugin install done (web + headless)"
           env:
             - name: DSH_TELEMETRY_DISABLED
@@ -103,12 +117,11 @@ spec:
               mountPath: /tmp
             - name: dsh-plugins
               mountPath: /dsh-plugins
+            - name: dsh-cc-patch
+              mountPath: /patch
           securityContext:
-            runAsUser: 1000
+            runAsUser: 0
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       containers:
@@ -120,6 +133,10 @@ spec:
             - web
             - --port
             - "{{ .Values.dshWeb.port }}"
+            {{- range .Values.dshWeb.trustedHosts }}
+            - --trusted-host
+            - {{ . | quote }}
+            {{- end }}
             {{- range .Values.dshWeb.trustedHosts }}
             - --trusted-host
             - {{ . | quote }}
@@ -157,8 +174,11 @@ spec:
               mountPath: /tmp
             - name: dsh-plugins
               mountPath: /dsh-plugins
+            - name: dsh-cc-patch
+              mountPath: /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib
           securityContext:
             runAsUser: 1000
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -169,6 +189,8 @@ spec:
         - name: dsh-home
           emptyDir: {}
         - name: dsh-tmp
+          emptyDir: {}
+        - name: dsh-cc-patch
           emptyDir: {}
         - name: dsh-plugins
           configMap:

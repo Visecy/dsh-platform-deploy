@@ -2,7 +2,7 @@
 replicaCount: 1
 
 image:
-  dshWeb: runzhliu/deepseek-harness:0.1.0-rc.6
+  dshWeb: ghcr.io/visecy/dsh-web-platform:latest
   pullPolicy: IfNotPresent
 
 # dsh web listen (public; in-process OIDC gate via dsh-web-auth fork)
@@ -31,7 +31,7 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Istio exposure (preferred: *.svc.visecy.top via internal-gateway)
+# Istio exposure via an internal gateway
 istio:
   enabled: false
   gateway: istio-system/internal-gateway
