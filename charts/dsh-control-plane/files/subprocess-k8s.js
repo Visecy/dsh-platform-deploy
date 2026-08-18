@@ -308,9 +308,24 @@ var SubprocessK8s = class extends SubprocessRuntime {
     this.resolver = config.resolveEndpoint;
   }
   /** The workspace id from a host path like /workspaces/<id>/... */
+  hostRoot = "/workspaces";
+  podRoot = "/workspace";
+  /** The workspace id from a host path like /workspaces/<id>/... */
   workspaceOf(cwd) {
-    const m = /^\/workspaces\/([^/]+)/.exec(cwd);
+    const esc = this.hostRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = new RegExp("^" + esc + "/([^/]+)").exec(cwd);
     return m?.[1];
+  }
+  /** Translate a host cwd (/workspaces/<id>/...) to the pod-side path. */
+  toPod(cwd) {
+    const hostRoot = this.hostRoot;
+    if (cwd === hostRoot) return this.podRoot;
+    if (!cwd.startsWith(hostRoot + "/")) return cwd;
+    const rest = cwd.slice(hostRoot.length + 1);
+    const seg = rest.split("/");
+    seg.shift();
+    const tail = seg.join("/");
+    return tail === "" ? this.podRoot : this.podRoot + "/" + tail;
   }
   /** Resolve the daemon endpoint for a cwd (per-workspace pod) or the static one. */
   async endpointFor(cwd) {
@@ -324,9 +339,11 @@ var SubprocessK8s = class extends SubprocessRuntime {
     return this.client.resolveExecutable(command);
   }
   spawn(spec) {
+    const podCwd = this.toPod(spec.cwd);
+    const translated = { ...spec, cwd: podCwd };
     const handle = new RemoteHandle(
       () => this.endpointFor(spec.cwd).then((ep) => this.client.withEndpoint(ep)),
-      spec,
+      translated,
       this.spillDir
     );
     void handle.start();
@@ -335,8 +352,10 @@ var SubprocessK8s = class extends SubprocessRuntime {
   async spawnTerminal(spec) {
     const ep = await this.endpointFor(spec.cwd);
     const bound = this.client.withEndpoint(ep);
-    const created = await bound.createPty({ argv: spec.argv, cwd: spec.cwd, env: spec.env, rows: spec.rows, cols: spec.cols });
-    return new RemoteTerminalHandle(bound, created.ptyId, created.pid, spec);
+    const podCwd = this.toPod(spec.cwd);
+    const created = await bound.createPty({ argv: spec.argv, cwd: podCwd, env: spec.env, rows: spec.rows, cols: spec.cols });
+    const translated = { ...spec, cwd: podCwd };
+    return new RemoteTerminalHandle(bound, created.ptyId, created.pid, translated);
   }
 };
 var RemoteHandle = class {

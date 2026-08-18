@@ -58,7 +58,7 @@ var K8sPodController = class {
       }
     };
     try {
-      await core.createNamespacedPod(spec.namespace, pod);
+      await core.createNamespacedPod({ namespace: spec.namespace, body: pod });
     } catch (e) {
       const status = e.body?.message ?? String(e);
       if (!status.includes("already exists")) throw e;
@@ -72,7 +72,7 @@ var K8sPodController = class {
       }
     };
     try {
-      await core.createNamespacedService(spec.namespace, svc);
+      await core.createNamespacedService({ namespace: spec.namespace, body: svc });
     } catch (e) {
       const status = e.body?.message ?? String(e);
       if (!status.includes("already exists")) throw e;
@@ -83,11 +83,11 @@ var K8sPodController = class {
     const core = this.kc.makeApiClient(k8s.CoreV1Api);
     const name2 = this.podName(workspaceId);
     try {
-      await core.deleteNamespacedPod(name2, namespace);
+      await core.deleteNamespacedPod({ name: name2, namespace });
     } catch {
     }
     try {
-      await core.deleteNamespacedService(this.svcName(workspaceId), namespace);
+      await core.deleteNamespacedService({ name: this.svcName(workspaceId), namespace });
     } catch {
     }
   }
@@ -95,8 +95,9 @@ var K8sPodController = class {
     const core = this.kc.makeApiClient(k8s.CoreV1Api);
     const deadline = Date.now() + timeoutMs;
     for (; ; ) {
-      const pod = await core.readNamespacedPod(name2, namespace);
-      const ready = pod.body.status?.conditions?.some(
+      const raw = await core.readNamespacedPod({ name: name2, namespace });
+      const pod = raw.body ?? raw;
+      const ready = pod.status?.conditions?.some(
         (c) => c.type === "Ready" && c.status === "True"
       );
       if (ready === true) return;
@@ -111,10 +112,11 @@ var K8sPodController = class {
     return `dsh-ws-${workspaceId}-data`;
   }
   async ensurePvc(workspaceId) {
+    const ns = this.pvc.namespace ?? this.requireNamespace();
     const core = this.kc.makeApiClient(k8s.CoreV1Api);
     const name2 = this.pvcName(workspaceId);
     const pvc = {
-      metadata: { name: name2, namespace: this.namespace },
+      metadata: { name: name2, namespace: ns },
       spec: {
         accessModes: ["ReadWriteOnce"],
         resources: { requests: { storage: this.pvc.storageSize ?? "10Gi" } },
@@ -122,17 +124,21 @@ var K8sPodController = class {
       }
     };
     try {
-      await core.createNamespacedPersistentVolumeClaim(this.namespace, pvc);
+      await core.createNamespacedPersistentVolumeClaim({ namespace: ns, body: pvc });
     } catch (e) {
       const status = e.body?.message ?? String(e);
       if (!status.includes("already exists")) throw e;
     }
     return name2;
   }
+  requireNamespace() {
+    throw new Error("workspace PVC namespace not configured");
+  }
   async deletePvc(workspaceId) {
+    const ns = this.pvc.namespace ?? this.requireNamespace();
     const core = this.kc.makeApiClient(k8s.CoreV1Api);
     try {
-      await core.deleteNamespacedPersistentVolumeClaim(this.pvcName(workspaceId), this.namespace);
+      await core.deleteNamespacedPersistentVolumeClaim({ name: this.pvcName(workspaceId), namespace: ns });
     } catch {
     }
   }
@@ -464,7 +470,11 @@ var WorkspaceRuntimeService = class extends Service {
   makeController() {
     const kc = new k8s2.KubeConfig();
     kc.loadFromDefault();
-    return new K8sPodController(kc);
+    return new K8sPodController(kc, {
+      namespace: this.config.namespace,
+      storageClassName: this.config.storageClassName,
+      storageSize: this.config.storageSize
+    });
   }
   async ensure(workspaceId) {
     const existing = this.inflight.get(workspaceId);
