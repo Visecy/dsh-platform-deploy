@@ -19,32 +19,36 @@ var DaemonFilesClient = class {
     this.baseUrl = baseUrl;
   }
   baseUrl;
-  async read(path, opts) {
-    const data = await this.post("/files/read", { path, offset: opts?.offset, maxBytes: opts?.maxBytes });
+  get defaultEndpoint() {
+    return this.baseUrl;
+  }
+  async read(path, opts, endpoint) {
+    const data = await this.post("/files/read", { path, offset: opts?.offset, maxBytes: opts?.maxBytes }, endpoint);
     return Buffer.from(data.bytes, "base64");
   }
-  async write(path, content, intent) {
-    const data = await this.post("/files/write", { path, content: Buffer.from(content).toString("base64"), intent });
+  async write(path, content, intent, endpoint) {
+    const data = await this.post("/files/write", { path, content: Buffer.from(content).toString("base64"), intent }, endpoint);
     return data.outcome;
   }
-  async list(path) {
-    const data = await this.post("/files/list", { path });
+  async list(path, endpoint) {
+    const data = await this.post("/files/list", { path }, endpoint);
     return data.entries;
   }
-  async info(path) {
-    const data = await this.post("/files/info", { path });
+  async info(path, endpoint) {
+    const data = await this.post("/files/info", { path }, endpoint);
     return data.info;
   }
-  async remove(path) {
-    await this.post("/files/remove", { path });
+  async remove(path, endpoint) {
+    await this.post("/files/remove", { path }, endpoint);
   }
-  async rename(src, dst) {
-    await this.post("/files/rename", { src, dst });
+  async rename(src, dst, endpoint) {
+    await this.post("/files/rename", { src, dst }, endpoint);
   }
-  async post(path, body) {
+  async post(path, body, endpoint) {
+    const base = endpoint ?? this.baseUrl;
     let res;
     try {
-      res = await fetch(this.baseUrl + path, {
+      res = await fetch(base + path, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body)
@@ -54,7 +58,8 @@ var DaemonFilesClient = class {
     }
     const payload = await res.json();
     if (!payload.ok) {
-      throw new DaemonError(payload.data?.error?.code ?? "ERROR", payload.data?.error?.message ?? "daemon error");
+      const err = payload.data?.error;
+      throw new DaemonError(err?.code ?? "ERROR", err?.message ?? String(payload.data));
     }
     return payload.data;
   }
@@ -104,13 +109,34 @@ function isText(bytes) {
 var FsK8s = class extends FileSystem {
   client;
   translate;
+  resolver;
   constructor(ctx, config) {
     super(ctx);
     this.client = new DaemonFilesClient(config.daemonEndpoint);
     this.translate = new PathTranslator(config.hostRoot, config.podRoot ?? "/workspace");
+    this.resolver = config.resolveEndpoint;
+  }
+  /** Attach the per-workspace resolver (from workspace-k8s wiring). */
+  attachResolver(resolver) {
+    this.resolver = resolver;
   }
   podPathOf(target) {
     return target.targetKey.slice("dsh-k8s:".length);
+  }
+  /** The workspace id from a host path like /workspaces/<id>/... */
+  workspaceOf(displayPath) {
+    const root = this.translate.hostRoot;
+    if (!displayPath.startsWith(root + "/")) return void 0;
+    const rest = displayPath.slice(root.length + 1);
+    const seg = rest.split("/")[0];
+    return seg === "" ? void 0 : seg;
+  }
+  async endpointFor(target) {
+    const resolver = this.resolver ?? this.ctx.workspaceEndpointResolver?.resolve;
+    if (resolver === void 0) return this.client.defaultEndpoint;
+    const ws = this.workspaceOf(target.displayPath);
+    if (ws === void 0) return this.client.defaultEndpoint;
+    return resolver(ws);
   }
   mapError(e) {
     if (e instanceof FsError) throw e;
@@ -156,7 +182,7 @@ var FsK8s = class extends FileSystem {
   }
   async stat(target, signal) {
     try {
-      const info = await this.client.info(this.podPathOf(target));
+      const info = await this.client.info(this.podPathOf(target), await this.endpointFor(target));
       if (info === void 0) return void 0;
       return {
         version: FsVersion(info.version ?? `v-${info.modifiedTime ?? 0}-${info.size ?? 0}`),
@@ -174,7 +200,7 @@ var FsK8s = class extends FileSystem {
   }
   async readText(target, signal) {
     try {
-      const bytes = await this.client.read(this.podPathOf(target));
+      const bytes = await this.client.read(this.podPathOf(target), void 0, await this.endpointFor(target));
       if (!isText(bytes)) throw new FsError("binary or invalid UTF-8", "FS_NOT_TEXT");
       return new TextDecoder("utf-8").decode(bytes);
     } catch (e) {
@@ -191,25 +217,27 @@ var FsK8s = class extends FileSystem {
   }
   async readBytes(target, signal, maxBytes) {
     try {
-      const info = await this.client.info(this.podPathOf(target));
+      const endpoint = await this.endpointFor(target);
+      const info = await this.client.info(this.podPathOf(target), endpoint);
       if (info !== void 0 && info.size !== void 0 && info.size > maxBytes) {
         throw new FsError(`file exceeds ${maxBytes} bytes`, "FS_TOO_LARGE");
       }
-      return await this.client.read(this.podPathOf(target), { maxBytes });
+      return await this.client.read(this.podPathOf(target), { maxBytes }, endpoint);
     } catch (e) {
       this.mapError(e);
     }
   }
   async listDir(target, signal) {
     try {
-      const entries = await this.client.list(this.podPathOf(target));
+      const endpoint = await this.endpointFor(target);
+      const entries = await this.client.list(this.podPathOf(target), endpoint);
       const out = [];
       for (const e of entries) {
         const podPath = e.path.startsWith("/") ? e.path : this.podPathOf(target) + "/" + e.path;
         const childTarget = { targetKey: FsTargetKey(`dsh-k8s:${podPath}`), displayPath: this.translate.toHost(podPath) };
         out.push({
           name: e.name,
-          type: e.type === "directory" ? "directory" : e.type === "symlink" ? "symlink" : e.type === "file" ? "file" : "other",
+          type: e.type === "directory" ? "directory" : e.type === "file" ? "file" : "other",
           target: childTarget,
           size: e.size
         });
@@ -222,22 +250,23 @@ var FsK8s = class extends FileSystem {
   async writeText(target, content, expected, signal, sandboxPolicy) {
     try {
       const podPath = this.podPathOf(target);
+      const endpoint = await this.endpointFor(target);
       let before = null;
       try {
-        const info = await this.client.info(podPath);
+        const info = await this.client.info(podPath, endpoint);
         if (info !== void 0 && info.type === "file") {
-          const bytes = await this.client.read(podPath);
-          if (isText(bytes)) before = new TextDecoder("utf-8").decode(bytes).replace(/\r\n/g, "\n");
+          const bytes = await this.client.read(podPath, void 0, endpoint);
+          if (isText(bytes)) before = new TextDecoder("utf-8").decode(bytes).replace(/\r\n/g, "");
         }
       } catch {
       }
       const intent = expected === void 0 ? void 0 : expected.kind === "createIfAbsent" ? { kind: "createIfAbsent" } : { kind: "replaceIfVersion", version: expected.version };
-      const outcome = await this.client.write(podPath, new TextEncoder().encode(content), intent);
+      const outcome = await this.client.write(podPath, new TextEncoder().encode(content), intent, endpoint);
       return {
         operation: outcome.operation === "create" ? "create" : "update",
         version: FsVersion(outcome.version),
         before: outcome.operation === "create" ? null : before,
-        after: content.replace(/\r\n/g, "\n")
+        after: content.replace(/\r\n/g, "")
       };
     } catch (e) {
       this.mapError(e);
@@ -246,7 +275,8 @@ var FsK8s = class extends FileSystem {
   async editText(target, edit, expected, signal, sandboxPolicy) {
     try {
       const podPath = this.podPathOf(target);
-      const info = await this.client.info(podPath);
+      const endpoint = await this.endpointFor(target);
+      const info = await this.client.info(podPath, endpoint);
       if (info === void 0) throw new FsError("no such file", "FS_EDIT_NOT_FOUND");
       let currentVersion;
       if (expected !== void 0) {
@@ -256,7 +286,7 @@ var FsK8s = class extends FileSystem {
           throw new FsError("stale version", "FS_STALE_VERSION");
         }
       }
-      const bytes = await this.client.read(podPath);
+      const bytes = await this.client.read(podPath, void 0, endpoint);
       if (!isText(bytes)) throw new FsError("binary file", "FS_NOT_TEXT");
       const current = new TextDecoder("utf-8").decode(bytes);
       let next;
@@ -271,8 +301,8 @@ var FsK8s = class extends FileSystem {
         next = current.slice(0, idx) + edit.newString + current.slice(idx + edit.oldString.length);
       }
       const st2 = await this.stat(target);
-      const outcome = await this.client.write(podPath, new TextEncoder().encode(next), { kind: "replaceIfVersion", version: st2?.version ?? "" });
-      return { version: FsVersion(outcome.version), before: current.replace(/\r\n/g, "\n"), after: next.replace(/\r\n/g, "\n") };
+      const outcome = await this.client.write(podPath, new TextEncoder().encode(next), { kind: "replaceIfVersion", version: st2?.version ?? "" }, endpoint);
+      return { version: FsVersion(outcome.version), before: current.replace(/\r\n/g, ""), after: next.replace(/\r\n/g, "") };
     } catch (e) {
       this.mapError(e);
     }

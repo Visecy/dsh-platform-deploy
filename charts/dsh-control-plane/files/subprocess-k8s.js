@@ -13,11 +13,23 @@ var DaemonError = class extends Error {
     this.code = code;
   }
 };
-var DaemonSubprocessClient = class {
-  constructor(baseUrl) {
+var DaemonSubprocessClient = class _DaemonSubprocessClient {
+  constructor(baseUrl, endpointOverride) {
     this.baseUrl = baseUrl;
+    this.endpointOverride = endpointOverride;
   }
   baseUrl;
+  endpointOverride;
+  get defaultEndpoint() {
+    return this.baseUrl;
+  }
+  /** A client pinned to one daemon endpoint (used after per-call resolution). */
+  withEndpoint(endpoint) {
+    return new _DaemonSubprocessClient(this.baseUrl, endpoint);
+  }
+  get endpoint() {
+    return this.endpointOverride ?? this.baseUrl;
+  }
   async resolveExecutable(command) {
     const data = await this.post("/commands/resolve-executable", { command });
     return data.path;
@@ -79,7 +91,7 @@ var DaemonSubprocessClient = class {
   async post(path, body) {
     let res;
     try {
-      res = await fetch(this.baseUrl + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      res = await fetch(this.endpoint + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     } catch (e) {
       throw new DaemonError("DAEMON_UNREACHABLE", `sandbox daemon unreachable: ${e.message}`);
     }
@@ -90,7 +102,7 @@ var DaemonSubprocessClient = class {
   async get(path) {
     let res;
     try {
-      res = await fetch(this.baseUrl + path);
+      res = await fetch(this.endpoint + path);
     } catch (e) {
       throw new DaemonError("DAEMON_UNREACHABLE", `sandbox daemon unreachable: ${e.message}`);
     }
@@ -288,28 +300,50 @@ var name = "@visecy/dsh-subprocess-k8s";
 var SubprocessK8s = class extends SubprocessRuntime {
   client;
   spillDir;
+  resolver;
   constructor(ctx, config) {
     super(ctx);
     this.client = new DaemonSubprocessClient(config.daemonEndpoint);
     this.spillDir = mkdtempSync(join2(tmpdir(), "dsh-subprocess-k8s-"));
+    this.resolver = config.resolveEndpoint;
+  }
+  /** The workspace id from a host path like /workspaces/<id>/... */
+  workspaceOf(cwd) {
+    const m = /^\/workspaces\/([^/]+)/.exec(cwd);
+    return m?.[1];
+  }
+  /** Resolve the daemon endpoint for a cwd (per-workspace pod) or the static one. */
+  async endpointFor(cwd) {
+    const resolver = this.resolver ?? this.ctx.workspaceEndpointResolver?.resolve;
+    if (resolver === void 0) return this.client.defaultEndpoint;
+    const ws = this.workspaceOf(cwd);
+    if (ws === void 0) return this.client.defaultEndpoint;
+    return resolver(ws);
   }
   async resolveExecutable(command, env, signal) {
     return this.client.resolveExecutable(command);
   }
   spawn(spec) {
-    const handle = new RemoteHandle(this.client, spec, this.spillDir);
+    const handle = new RemoteHandle(
+      () => this.endpointFor(spec.cwd).then((ep) => this.client.withEndpoint(ep)),
+      spec,
+      this.spillDir
+    );
     void handle.start();
     return handle;
   }
   async spawnTerminal(spec) {
-    const created = await this.client.createPty({ argv: spec.argv, cwd: spec.cwd, env: spec.env, rows: spec.rows, cols: spec.cols });
-    return new RemoteTerminalHandle(this.client, created.ptyId, created.pid, spec);
+    const ep = await this.endpointFor(spec.cwd);
+    const bound = this.client.withEndpoint(ep);
+    const created = await bound.createPty({ argv: spec.argv, cwd: spec.cwd, env: spec.env, rows: spec.rows, cols: spec.cols });
+    return new RemoteTerminalHandle(bound, created.ptyId, created.pid, spec);
   }
 };
 var RemoteHandle = class {
-  constructor(client, spec, spillDir) {
-    this.client = client;
+  constructor(clientFactory, spec, spillDir) {
+    this.clientFactory = clientFactory;
     this.spec = spec;
+    this.client = new DaemonSubprocessClient("http://placeholder.invalid:1");
     this.pid = -1;
     this.cmdId = "";
     this.done = new Promise((res) => {
@@ -341,7 +375,7 @@ var RemoteHandle = class {
     this.collected.stdout = mkCollect("stdout");
     this.collected.stderr = mkCollect("stderr");
   }
-  client;
+  clientFactory;
   spec;
   pid;
   stdin;
@@ -353,8 +387,10 @@ var RemoteHandle = class {
   resolveDone;
   pollers = [];
   terminated = false;
+  client;
   async start() {
     try {
+      this.client = await this.clientFactory();
       const stdinData = this.spec.stdio.stdin !== "ignore" && this.spec.stdio.stdin !== "pipe" ? new TextEncoder().encode(this.spec.stdio.stdin.data) : void 0;
       const info = await this.client.run({
         argv: this.spec.argv,
