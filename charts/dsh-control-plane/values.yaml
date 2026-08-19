@@ -3,7 +3,7 @@ replicaCount: 1
 
 image:
   dshWeb: ghcr.io/visecy/dsh-web-platform:latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 # dsh web listen (public; in-process OIDC gate via dsh-web-auth fork)
 dshWeb:
@@ -19,6 +19,13 @@ auth:
   # secret refs
   oidcClientSecretRef: ""
   sessionSecretRef: ""
+
+# workspace execution pods (sandbox daemon)
+workspace:
+  image: ghcr.io/visecy/dsh-sandbox-daemon:0.1.0
+  daemonPort: 4390
+  storageClassName: "local-path"
+  storageSize: "2Gi"
 
 ingress:
   enabled: false

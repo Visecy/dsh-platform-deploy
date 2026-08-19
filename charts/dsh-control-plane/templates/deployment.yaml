@@ -19,10 +19,13 @@ spec:
         - name: ghcr-pull
       securityContext:
         fsGroup: 1000
-      initContainers:
-        # ── plugin installer: pnpm-safe profile setup (dsh-web-auth fork +
-        #    @visecy/dsh-auth-oidc in-process OIDC gate) ──────────────────────
-        - name: plugin-install
+      containers:
+        # ── dsh web platform image: self-contained (plugins + privileged
+        #    patch baked in at /opt/dsh-home by the release pipeline).
+        #    Runtime needs a writable DSH_HOME (profile synthesis writes
+        #    cordis.yml), so we copy the baked-in home into the emptyDir
+        #    volume on every start. ─────────────────────────────────────────
+        - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
           imagePullPolicy: Always
           command:
@@ -30,117 +33,13 @@ spec:
             - -c
             - |
               set -e
-              export HOME=/home/node
-              export DSH_HOME=/home/node/.dsh
-              export PNPM_HOME=/tmp/pnpm
-              export COREPACK_HOME=/tmp/corepack
-              export XDG_DATA_HOME=/tmp/xdg
-              P=/home/node/.dsh/profiles/web
-              # first run initializes the profile (manifest + pnpm workspace root)
-              dsh --profile web --dump-config > /dev/null 2>&1 || true
-              # cat redirect (not cp): ConfigMap files are 0444; cp would inherit the
-              # read-only mode and block re-runs of this init on CrashLoop/restart
-              install_plugin() {
-                local name="$1" file="$2" pkg="$3"
-                mkdir -p "$P/node_modules/@visecy/$name"
-                cat "/dsh-plugins/$file" > "$P/node_modules/@visecy/$name/index.js"
-                cat "/dsh-plugins/$pkg" > "$P/node_modules/@visecy/$name/package.json"
-              }
-              install_plugin dsh-auth-oidc auth-oidc-plugin.js pkg-auth-oidc.json
-              install_plugin dsh-fs-k8s fs-k8s.js pkg-fs-k8s.json
-              install_plugin dsh-subprocess-k8s subprocess-k8s.js pkg-subprocess-k8s.json
-              install_plugin dsh-workspace-k8s workspace-k8s.js pkg-workspace-k8s.json
-              corepack pnpm --dir "$P" --store-dir /tmp/pnpm-store add -w dsh-web-auth@0.1.0 @kubernetes/client-node
-              cat /dsh-plugins/cordis.patch.yml > "$P/cordis.patch.yml"
-
-              # headless profile: same k8s providers (for one-shot tasks)
-              H=/home/node/.dsh/profiles/headless
-              dsh --profile headless --dump-config > /dev/null 2>&1 || true
-              install_plugin2() {
-                local name="$1" file="$2" pkg="$3"
-                mkdir -p "$H/node_modules/@visecy/$name"
-                cat "/dsh-plugins/$file" > "$H/node_modules/@visecy/$name/index.js"
-                cat "/dsh-plugins/$pkg" > "$H/node_modules/@visecy/$name/package.json"
-              }
-              install_plugin2 dsh-fs-k8s fs-k8s.js pkg-fs-k8s.json
-              install_plugin2 dsh-subprocess-k8s subprocess-k8s.js pkg-subprocess-k8s.json
-              install_plugin2 dsh-workspace-k8s workspace-k8s.js pkg-workspace-k8s.json
-              corepack pnpm --dir "$H" --store-dir /tmp/pnpm-store add -w @kubernetes/client-node
-              cat > "$H/cordis.patch.yml" << 'PATCHEOF'
-              - id: subprocess
-                disabled: true
-              - id: fs-sandbox
-                disabled: true
-              - insert:
-                  - id: workspace-runtime
-                    name: '@visecy/dsh-workspace-k8s'
-                    config:
-                      namespace: !!js process.env.WS_NAMESPACE ?? 'dsh-platform'
-                      image: !!js process.env.WS_IMAGE ?? 'ghcr.io/visecy/dsh-sandbox-daemon:0.1.0'
-                      daemonPort: 4390
-                      storageClassName: !!js process.env.WS_STORAGE_CLASS ?? 'local-path'
-                      storageSize: '2Gi'
-                  - id: fs-k8s
-                    name: '@visecy/dsh-fs-k8s'
-                    config:
-                      daemonEndpoint: !!js (process.env.WS_DAEMON_ENDPOINT ?? 'http://127.0.0.1:4390')
-                      hostRoot: '/workspaces'
-                      podRoot: '/workspace'
-                  - id: subprocess-k8s
-                    name: '@visecy/dsh-subprocess-k8s'
-                    config:
-                      daemonEndpoint: !!js (process.env.WS_DAEMON_ENDPOINT ?? 'http://127.0.0.1:4390')
-              PATCHEOF
-
-              # ── privileged-method unlock: settings/credentials RPCs are pinned to
-              #    loopback by the official client-connection (PRIVILEGED_METHODS
-              #    passes an empty trust list). Our OIDC gate authenticates every /api
-              #    request, so reusing the trusted hosts is safe (research §6.3c).
-              # privileged-method unlock: copy the lib to a shared volume and patch
-              # the copy; dsh-web mounts it over the official lib dir (rootfs RO).
-              CCLIB=/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib
-              mkdir -p /patch
-              cp -r "$CCLIB/." /patch/
-              sed -i 's/isTrustedApiRequest(request, \[\])/isTrustedApiRequest(request, trustedHosts)/' /patch/index.js
-              echo "privileged unlock: $(grep -c 'isTrustedApiRequest(request, trustedHosts)' /patch/index.js) line(s) patched"
-
-              # init runs as root to patch /usr/local; hand the profile back to node
-              chown -R 1000:1000 /home/node/.dsh
-              echo "plugin install done (web + headless)"
-          env:
-            - name: DSH_TELEMETRY_DISABLED
-              value: "1"
-          volumeMounts:
-            - name: dsh-home
-              mountPath: /home/node/.dsh
-            - name: dsh-tmp
-              mountPath: /tmp
-            - name: dsh-plugins
-              mountPath: /dsh-plugins
-            - name: dsh-cc-patch
-              mountPath: /patch
-          securityContext:
-            runAsUser: 0
-            allowPrivilegeEscalation: false
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-      containers:
-        # ── dsh web with in-process OIDC gate (no sidecar) ────────────────────
-        - name: dsh-web
-          image: "{{ .Values.image.dshWeb }}"
-          imagePullPolicy: Always
-          args:
-            - web
-            - --port
-            - "{{ .Values.dshWeb.port }}"
-            {{- range .Values.dshWeb.trustedHosts }}
-            - --trusted-host
-            - {{ . | quote }}
-            {{- end }}
-            {{- range .Values.dshWeb.trustedHosts }}
-            - --trusted-host
-            - {{ . | quote }}
-            {{- end }}
+              if [ -d /opt/dsh-home/profiles ]; then
+                cp -a /opt/dsh-home/. /home/node/.dsh/
+              fi
+              exec dsh web --port "{{ .Values.dshWeb.port }}" \
+                {{- range .Values.dshWeb.trustedHosts }}
+                --trusted-host {{ . | quote }} \
+                {{- end }}
           env:
             - name: DSH_TELEMETRY_DISABLED
               value: "1"
@@ -162,20 +61,18 @@ spec:
                 secretKeyRef:
                   name: {{ required "auth.sessionSecretRef required" .Values.auth.sessionSecretRef }}
                   key: session-secret
+            - name: WS_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: WS_IMAGE
+              value: {{ .Values.workspace.image | quote }}
           ports:
             - containerPort: {{ .Values.dshWeb.port }}
               name: dsh-web
           volumeMounts:
             - name: dsh-home
               mountPath: /home/node/.dsh
-            - name: dsh-home
-              mountPath: /workspace
             - name: dsh-tmp
               mountPath: /tmp
-            - name: dsh-plugins
-              mountPath: /dsh-plugins
-            - name: dsh-cc-patch
-              mountPath: /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib
           securityContext:
             runAsUser: 1000
             runAsNonRoot: true
@@ -190,12 +87,6 @@ spec:
           emptyDir: {}
         - name: dsh-tmp
           emptyDir: {}
-        - name: dsh-cc-patch
-          emptyDir: {}
-        - name: dsh-plugins
-          configMap:
-            name: {{ include "dsh-control-plane.fullname" . }}-plugins
-            defaultMode: 0444
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
