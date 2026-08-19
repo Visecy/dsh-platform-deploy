@@ -22,9 +22,9 @@ spec:
       containers:
         # ── dsh web platform image: self-contained (plugins + privileged
         #    patch baked in at /opt/dsh-home by the release pipeline).
-        #    Runtime needs a writable DSH_HOME (profile synthesis writes
-        #    cordis.yml), so we copy the baked-in home into the emptyDir
-        #    volume on every start. ─────────────────────────────────────────
+        #    Runtime DSH_HOME must be writable (profile synthesis writes
+        #    cordis.yml): override to the emptyDir volume and copy the
+        #    baked-in home on start. ────────────────────────────────────────
         - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
           imagePullPolicy: Always
@@ -34,13 +34,15 @@ spec:
             - |
               set -e
               if [ -d /opt/dsh-home/profiles ]; then
-                cp -a /opt/dsh-home/. /home/node/.dsh/
+                cp -r /opt/dsh-home/. /home/node/.dsh/
               fi
               exec dsh web --port "{{ .Values.dshWeb.port }}" \
                 {{- range .Values.dshWeb.trustedHosts }}
                 --trusted-host {{ . | quote }} \
                 {{- end }}
           env:
+            - name: DSH_HOME
+              value: /home/node/.dsh
             - name: DSH_TELEMETRY_DISABLED
               value: "1"
             - name: OIDC_ISSUER
