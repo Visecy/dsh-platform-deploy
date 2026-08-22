@@ -22,7 +22,7 @@ auth:
 
 # workspace execution pods (sandbox daemon)
 workspace:
-  image: ghcr.io/visecy/dsh-sandbox-daemon:0.1.0
+  image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.19
   daemonPort: 4390
   storageClassName: "local-path"
   storageSize: "2Gi"
