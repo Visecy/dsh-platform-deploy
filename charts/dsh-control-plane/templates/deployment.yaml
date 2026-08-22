@@ -27,7 +27,7 @@ spec:
         #    baked-in home on start. ────────────────────────────────────────
         - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
-          imagePullPolicy: Always
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - /bin/sh
             - -c
@@ -75,6 +75,8 @@ spec:
               mountPath: /home/node/.dsh
             - name: dsh-tmp
               mountPath: /tmp
+            - name: dsh-workspaces
+              mountPath: /workspaces
           securityContext:
             runAsUser: 1000
             runAsNonRoot: true
@@ -88,6 +90,8 @@ spec:
         - name: dsh-home
           emptyDir: {}
         - name: dsh-tmp
+          emptyDir: {}
+        - name: dsh-workspaces
           emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:

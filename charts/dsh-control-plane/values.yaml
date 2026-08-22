@@ -3,7 +3,7 @@ replicaCount: 1
 
 image:
   dshWeb: ghcr.io/visecy/dsh-web-platform:latest
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
 
 # dsh web listen (public; in-process OIDC gate via dsh-web-auth fork)
 dshWeb:
