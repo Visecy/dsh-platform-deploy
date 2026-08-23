@@ -67,6 +67,11 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: WS_IMAGE
               value: {{ .Values.workspace.image | quote }}
+            - name: DSH_PG_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.connectionStringSecret | default "dsh-db" }}
+                  key: DSH_PG_CONNECTION_STRING
           ports:
             - containerPort: {{ .Values.dshWeb.port }}
               name: dsh-web

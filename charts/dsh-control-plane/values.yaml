@@ -27,6 +27,10 @@ workspace:
   storageClassName: "local-path"
   storageSize: "2Gi"
 
+# shared CNPG PostgreSQL connection secret injected into the control plane.
+db:
+  connectionStringSecret: dsh-db
+
 ingress:
   enabled: false
   className: ""
