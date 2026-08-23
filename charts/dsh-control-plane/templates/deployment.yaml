@@ -70,7 +70,7 @@ spec:
             - name: DSH_PG_CONNECTION_STRING
               valueFrom:
                 secretKeyRef:
-                  name: {{ dig "db" "connectionStringSecret" "dsh-db" .Values }}
+                  name: {{ if .Values.db }}{{ .Values.db.connectionStringSecret | default "dsh-db" }}{{ else }}dsh-db{{ end }}
                   key: DSH_PG_CONNECTION_STRING
           ports:
             - containerPort: {{ .Values.dshWeb.port }}
