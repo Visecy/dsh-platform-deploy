@@ -8,7 +8,11 @@ image:
 # dsh web listen (public; in-process OIDC gate via dsh-web-auth fork)
 dshWeb:
   port: 3080
-  # public authority(ies) the /api trust fence accepts (--trusted-host)
+  # public authority(ies) forwarded to dsh web as --trusted-host. DSH 0.1.2
+  # gates EVERY /api request / RPC channel / WebSocket on this list (Host /
+  # Origin fence of dsh-client-connection), so deployments that publish the
+  # GUI through a hostname MUST set it (e.g. dsh.<domain>) or the browser UI
+  # gets 403 on every /api call.
   trustedHosts: []
 
 auth:
