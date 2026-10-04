@@ -105,11 +105,27 @@ oauth2Proxy:
   # python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
   cookieSecretRef: ""
   cookieSecretKey: session-secret
-  # Source CIDRs allowed to set X-Forwarded-* for this proxy. MUST be set in
-  # production to the ingress/gateway pod CIDR: empty means oauth2-proxy's
-  # back-compat "trust every peer" mode (it logs a startup warning), which lets
-  # any client pick X-Forwarded-Host/Proto -- open-redirect material whenever
-  # the redirect URL would otherwise be derived from the request.
+  # Source CIDRs allowed to set X-Forwarded-* for this proxy, mapped to
+  # `--trusted-proxy-ip` (repeat the --set for every hop that may add or
+  # rewrite X-Forwarded-*).
+  #
+  # REQUIRED FOR PRODUCTION: set it to the ingress/gateway Pod CIDR. Empty
+  # means oauth2-proxy's back-compat "trust every peer" mode, which logs
+  #   WARNING: --reverse-proxy is enabled but no --trusted-proxy-ip CIDRs were
+  #   configured. All connecting IPs are trusted to supply X-Forwarded-*
+  #   headers by default (0.0.0.0/0, ::/0)
+  # and lets any client pick X-Forwarded-Proto/Host/For.
+  #
+  # What degrades when it is empty -- NOT an authentication bypass (the
+  # session cookie still gates access): every per-request decision the proxy
+  # derives from those headers becomes client-influenced -- the redirect it
+  # builds for /oauth2/*, cookie-flag decisions, and client-IP logging -- and
+  # any future component that reads X-Forwarded-* inherits that trust. Pinning
+  # oauth2Proxy.publicOrigin keeps the APP's launch-token handoff redirect off
+  # those headers; it does not make trusting every peer correct.
+  #
+  # Keep it configuration: the CIDR is deployment-specific and is never
+  # hardcoded in this chart.
   trustedProxyIps: []
   # Extra `--flag=value` args appended verbatim (escape hatch).
   extraArgs: []

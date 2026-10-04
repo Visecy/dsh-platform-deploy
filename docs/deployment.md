@@ -98,12 +98,25 @@ kubectl -n dsh-platform create secret generic dsh-oauth2-proxy \
   --from-literal=cookie-secret="$(python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
 
 # control plane
+#
+# 注解值必须是字符串：用 --set-string（--set ...=3600 会被 helm 解析成 int64，
+# metadata.annotations 是 map[string]string，API server 直接拒绝：
+# json: cannot unmarshal number into Go struct field
+# ObjectMeta.metadata.annotations of type string）
+#
+# oauth2Proxy.trustedProxyIps 是生产必需项：填 ingress/gateway Pod 的 CIDR
+# （多个跳位依次加下标），留空 = 信任所有来源的 X-Forwarded-*（见"trustedProxyIps：
+# 生产必需"）
+#
+# 注意：本命令里的注释不能夹在续行（\）中间——行尾反斜杠会把下一行的 # 变成同一
+# 逻辑行的注释，吞掉后面的参数；占位符 <...> 也要先替换成实际值再执行。
 helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platform \
   --set auth.oidcIssuer=https://authentik.<cluster>/application/o/dsh-platform/ \
   --set auth.oidcClientId=<client-id> \
   --set auth.redirectUri=https://dsh.<domain>/oauth2/callback \
   --set oauth2Proxy.redirectUrl=https://dsh.<domain>/oauth2/callback \
   --set oauth2Proxy.publicOrigin=https://dsh.<domain> \
+  --set oauth2Proxy.trustedProxyIps[0]=<ingress-pod-cidr> \
   --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
   --set oauth2Proxy.cookieSecretKey=cookie-secret \
   --set auth.oidcClientSecretRef=dsh-oidc \
@@ -113,10 +126,6 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
   --set ingress.host=dsh.<domain> \
   --set ingress.className=nginx \
   --set ingress.tlsSecret=dsh-tls \
-  # 注解值必须是字符串：用 --set-string（--set ...=3600 会被 helm 解析成
-  # int64，metadata.annotations 是 map[string]string，API server 直接拒绝：
-  # json: cannot unmarshal number into Go struct field
-  # ObjectMeta.metadata.annotations of type string）
   --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-buffering"=off \
   --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-read-timeout"=3600 \
   --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-send-timeout"=3600
@@ -141,6 +150,26 @@ identity-bridge 用官方 launch-token handoff 提供首页：需要重定向时
 在 `oauth2Proxy.trustedProxyIps` 为空时任何客户端都能提供。应用自身的 authority fence
 （未知 authority → 403 且不带 `Location`）目前挡住了带 token 的 URL 外泄，但那是兜底，
 不是主控制；生产环境请同时设置 `oauth2Proxy.publicOrigin` 与 `oauth2Proxy.trustedProxyIps`。
+
+### trustedProxyIps：生产必需
+
+sidecar 以 `--reverse-proxy=true` 运行，即信任上游给的 `X-Forwarded-Proto`/`Host`；"谁有
+资格提供这组头"由 `oauth2Proxy.trustedProxyIps`（→ oauth2-proxy `--trusted-proxy-ip`）决定。
+
+- **生产环境必须设置**：值为 ingress/gateway Pod 的 CIDR，链路上每个可能追加或改写
+  `X-Forwarded-*` 的跳都要列上（`--set oauth2Proxy.trustedProxyIps[0]=...`，多跳依次加下标）。
+- 保持为配置项：网段因部署而异，chart 不会内置任何网段。
+- 留空 = oauth2-proxy 的向后兼容模式：信任所有来源，并在启动时打印
+  `WARNING: --reverse-proxy is enabled but no --trusted-proxy-ip CIDRs were configured.
+  All connecting IPs are trusted to supply X-Forwarded-* headers by default (0.0.0.0/0, ::/0)`。
+
+留空会退化什么（**不是**认证绕过：访问仍然要过 sidecar 的会话 cookie）：
+
+1. 任何客户端都能提供 `X-Forwarded-Proto`/`Host`/`For`，sidecar 自身的逐请求判断
+   （`/oauth2/*` 的重定向、cookie 安全标志、客户端 IP 日志）都受其影响；
+2. 应用侧 handoff 的重定向 origin 若未被 `oauth2Proxy.publicOrigin` 钉住，同样受其影响
+   —— 这正是要钉住 `DSH_PUBLIC_ORIGIN` 的原因；
+3. 将来任何读取 `X-Forwarded-*` 的组件都会继承这层信任。
 
 ### 迁移到 sidecar 必须做的三件事
 
@@ -170,7 +199,7 @@ identity-bridge 用官方 launch-token handoff 提供首页：需要重定向时
 - `kubectl logs <pod> -c oauth2-proxy`：`trusted-proxy-ip` 未设置时会有启动告警
   （`WARNING: --reverse-proxy is enabled but no --trusted-proxy-ip CIDRs were configured.
   All connecting IPs are trusted to supply X-Forwarded-* headers by default (0.0.0.0/0, ::/0)`），
-  生产部署不应出现这条告警（见"已知限制"）
+  生产部署不应出现这条告警（见"trustedProxyIps：生产必需"）
 - `kubectl logs` 检查无 cordis 装配告警（未知 patch 行会打印 "patch: entry ... not found"）
 
 ## 工作区运行时
@@ -189,6 +218,5 @@ identity-bridge 用官方 launch-token handoff 提供首页：需要重定向时
   platform-domain），版本与镜像 tag 绑定：无法单独升级某个插件而不重建镜像
 - TLS 终止在 Ingress / Istio gateway（sidecar 与 dsh 之间是 pod 内明文 loopback ——
   仅在"loopback 绑定"表里的第二态成立；sidecar 以 `--reverse-proxy=true` 信任网关的
-  `X-Forwarded-Proto`/`Host`，生产环境**必须**把 `oauth2Proxy.trustedProxyIps` 设为
-  网关/ingress Pod 的 CIDR：留空等于信任所有来源的 `X-Forwarded-*`，在
-  `auth.redirectUri` 与 `oauth2Proxy.redirectUrl` 都为空时可用于开放重定向/钓鱼）
+  `X-Forwarded-Proto`/`Host`，生产环境**必须**设置 `oauth2Proxy.trustedProxyIps`，
+  否则所有来源的 `X-Forwarded-*` 都被信任：见"trustedProxyIps：生产必需"）
