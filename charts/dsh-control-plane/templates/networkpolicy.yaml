@@ -10,8 +10,23 @@ spec:
       app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
   policyTypes: [Ingress]
   ingress:
-    # dsh web (3080) is reachable from the cluster (ingress/port-forward);
-    # no other ports are exposed.
+    # oauth2-proxy ({{ .Values.oauth2Proxy.port }}) is the pod's entry point and stays reachable
+    # from the cluster (ingress controller / internal gateway / port-forward),
+    # exactly as the old dsh web port was.
     - ports:
         - protocol: TCP
-          port: 3080
+          port: {{ .Values.oauth2Proxy.port }}
+    # dsh web ({{ .Values.dshWeb.port }}) is reachable ONLY from this pod. Normal sidecar
+    # traffic goes over 127.0.0.1 inside the pod netns, which NetworkPolicy
+    # never sees; this rule covers the remaining path -- a connection to the
+    # pod IP -- and allows it only from pods carrying this workload's own
+    # labels, i.e. this pod's own sidecar (replicaCount is 1). Any other
+    # source, including other namespaces, is denied. The process itself also
+    # binds loopback, so this is defence in depth, not the only barrier.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.dshWeb.port }}

@@ -3,21 +3,32 @@
 ## 架构
 
 ```
-Ingress (TLS)
-  -> dsh-control-plane (Deployment, dsh-web-platform 镜像)
-       dsh web :3080  —— 进程内 OIDC gate（@visecy/dsh-web-auth fork 的
-       webserver request-gate + @visecy/dsh-auth-oidc），同一进程承载
-       /api 网关（dsh-client-connection）、前端与 workspace REST API
+浏览器 ── Ingress / Istio internal-gateway（host 路由，不支持子路径）
+  -> dsh-control-plane Pod（无状态：readOnlyRootFilesystem，无 PVC）
+       oauth2-proxy sidecar :4180   OIDC 会话（cookie store，无 Redis/DB）
+         └─ 向 dsh 注入身份头 X-Forwarded-User / -Groups（见下）
+       dsh web 127.0.0.1:3080       仅 loopback，Service 不指向它
+         ├─ /api 网关（dsh-client-connection，Host/Origin fence）
+         ├─ 前端与 workspace REST API
+         └─ session-persistence-rdb / storage-db -> Postgres
   -> workspace pods (动态创建, dsh-workspace-k8s manager)
        sandbox-daemon                         :4390 (仅控制面可达, NetworkPolicy)
        workspace PVC (per workspace)
 ```
 
-> DSH 0.1.2 起 `/api`（RPC/WS）由 dsh-client-connection 统一 Host/Origin
-> fence 保护：`--trusted-host`（即 `dshWeb.trustedHosts`）必须列出部署的
-> 公网 authority，否则所有 `/api` 请求 403。镜像构建时的 patch-dsh 补丁
-> 绕过 0.1.2 新增的浏览器 Cookie 会话层——OIDC gate 是唯一会话层，因此
-> 不要单独暴露 dsh web 端口。
+认证已外置到同 pod 的 oauth2-proxy sidecar：Service 只暴露 sidecar 端口
+（`http` → 4180），dsh web 只绑 `127.0.0.1`，所以身份头只可能由 sidecar 产生
+（结构性信任，而非策略性信任）。`--trusted-host`（即 `dshWeb.trustedHosts`）
+仍需列出公网 authority：DSH 0.1.2 起 `/api`（RPC/WS）由 dsh-client-connection
+的 Host/Origin fence 保护；sidecar 以 `--pass-host-header=true` 原样转发 Host，
+因此行为与直连一致，否则所有 `/api` 请求 403。
+
+> **身份头**：`--set-xauthrequest` 产生的 `X-Auth-Request-*` 是返回给**浏览器**的
+> 响应头（nginx auth_request 风格）；真正到达 DSH 进程的是请求头
+> `X-Forwarded-User` / `X-Forwarded-Groups` / `X-Forwarded-Email` /
+> `X-Forwarded-Preferred-Username`（`--pass-user-headers=true` 默认开启）。
+> identity-bridge 读 `X-Forwarded-*`。已在本地用镜像内的 v7.15.5 二进制实测。
+
 
 ## 前置
 
@@ -35,24 +46,52 @@ kubectl -n dsh-platform create secret generic dsh-oidc \
   --from-literal=oidc-client-secret=<client-secret> \
   --from-literal=session-secret=<random-32-bytes>
 
+# oauth2-proxy 的 cookie 密钥：必须是 16/24/32 字节（或它们的 base64url），
+# 与上面的 session-secret 要求不同，建议单独一个 secret
+kubectl -n dsh-platform create secret generic dsh-oauth2-proxy \
+  --from-literal=cookie-secret="$(python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+
 # control plane
 helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platform \
   --set auth.oidcIssuer=https://authentik.<cluster>/application/o/dsh-platform/ \
   --set auth.oidcClientId=<client-id> \
   --set auth.redirectUri=https://dsh.<domain>/auth/callback \
+  --set oauth2Proxy.redirectUrl=https://dsh.<domain>/oauth2/callback \
+  --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
+  --set oauth2Proxy.cookieSecretKey=cookie-secret \
   --set auth.oidcClientSecretRef=dsh-oidc \
   --set auth.sessionSecretRef=dsh-oidc \
   --set dshWeb.trustedHosts[0]=dsh.<domain> \
   --set ingress.enabled=true \
   --set ingress.host=dsh.<domain> \
   --set ingress.className=nginx \
-  --set ingress.tlsSecret=dsh-tls
+  --set ingress.tlsSecret=dsh-tls \
+  --set ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-buffering"=off \
+  --set ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-read-timeout"=3600 \
+  --set ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-send-timeout"=3600
 ```
+
+### 迁移到 sidecar 必须做的三件事
+
+1. **IdP 新增回调地址** `https://dsh.<domain>/oauth2/callback`（oauth2-proxy 的
+   路径；旧的 `/auth/callback` 属于已删除的进程内 gate）。只改 origin 不改路径
+   也可以：`oauth2Proxy.redirectUrl` 留空时由 `auth.redirectUri` 的 origin +
+   `/oauth2/callback` 推导。
+2. **cookie secret** 长度必须是 16/24/32 字节，否则 sidecar 启动即失败
+   （`cookie_secret must be 16, 24, or 32 bytes to create an AES cipher`）。
+   `oauth2Proxy.cookieSecretRef` 留空会回落到 `auth.sessionSecretRef` 的
+   `session-secret`，只有在那个值恰好合规时才可用。
+3. **长连接注解**（仅 nginx 需要）：SSE `/plugins/events` 需要 `proxy-buffering: "off"`，
+   WebSocket `/api/remote.mux` 与 SSE 需要 `proxy-read-timeout`/`proxy-send-timeout`。
+   Istio/Envoy 默认流式转发、route timeout 默认关闭，无需注解；sidecar 自身已用
+   `--flush-interval=1s` 与 `--upstream-timeout=1h` 调优。
 
 ## 验证
 
-- 未登录访问 `/` -> 302 到 authentik
-- 登录回跳 -> 会话 cookie 生效，页面与 `/api` 正常（无 401/403）
+- 未登录访问 `/` -> 302 到 IdP（`--skip-provider-button=true`，无中间登录页）
+- 登录回跳 -> sidecar 会话 cookie 生效，页面与 `/api` 正常（无 401/403）
+- `kubectl logs <pod> -c oauth2-proxy` 无启动告警（`trusted-proxy-ip` 未设置时会
+  打印 "trusting all source IPs"）
 - `kubectl logs` 检查无 cordis 装配告警（未知 patch 行会打印 "patch: entry ... not found"）
 
 ## 工作区运行时
@@ -67,4 +106,6 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
 
 - 控制面单副本（多副本 = Plan 后续：共享状态后端 + 会话粘滞）
 - 平台插件（fs-k8s/subprocess-k8s/workspace-k8s/auth-oidc/user-domain）的 cordis 装配待控制面镜像集成
-- TLS 终止在 Ingress（gate 本身 HTTP；生产建议前置 oauth2-proxy 类做额外头卫生可选）
+- TLS 终止在 Ingress / Istio gateway（sidecar 与 dsh 之间是 pod 内明文 loopback；
+  sidecar 以 `--reverse-proxy=true` 信任网关的 `X-Forwarded-Proto`/`Host`，
+  生产环境建议把 `oauth2Proxy.trustedProxyIps` 设为网关 Pod 的 CIDR）

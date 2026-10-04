@@ -5,14 +5,19 @@ image:
   dshWeb: ghcr.io/visecy/dsh-web-platform:latest
   pullPolicy: IfNotPresent
 
-# dsh web listen (public; in-process OIDC gate via dsh-web-auth fork)
+# dsh web binds LOOPBACK ONLY (templates/deployment.yaml passes --host
+# 127.0.0.1) and no Service targets it: the oauth2-proxy sidecar below is the
+# pod's single entry point. That is what makes the identity headers
+# structural rather than policy-based -- the DSH process is not reachable from
+# anywhere except its own pod.
 dshWeb:
   port: 3080
   # public authority(ies) forwarded to dsh web as --trusted-host. DSH 0.1.2
   # gates EVERY /api request / RPC channel / WebSocket on this list (Host /
   # Origin fence of dsh-client-connection), so deployments that publish the
   # GUI through a hostname MUST set it (e.g. dsh.<domain>) or the browser UI
-  # gets 403 on every /api call.
+  # gets 403 on every /api call. The original Host reaches dsh web unchanged
+  # because the sidecar runs with --pass-host-header=true.
   trustedHosts: []
 
 auth:
@@ -23,6 +28,40 @@ auth:
   # secret refs
   oidcClientSecretRef: ""
   sessionSecretRef: ""
+
+# oauth2-proxy sidecar: terminates the user session in an encrypted cookie
+# (stateless -- no Redis, no DB, no volume) and reverse-proxies to the
+# loopback-bound dsh web container, adding the verified identity as request
+# headers (X-Forwarded-User / -Groups; see the README note in
+# docs/deployment.md and templates/deployment.yaml).
+oauth2Proxy:
+  image: quay.io/oauth2-proxy/oauth2-proxy
+  # pinned; the sidecar's own image runs as uid 65532 (distroless, non-root)
+  tag: v7.15.5
+  # container port; the Service exposes this one and nothing else
+  port: 4180
+  resources: {}
+  # OIDC scopes requested at the IdP. `groups` must stay: without it the
+  # groups claim is absent and the DSH admin gate sees no groups.
+  scope: "openid email profile groups"
+  # OIDC claim that carries the user's groups.
+  groupsClaim: groups
+  # Redirect URL registered at the IdP. oauth2-proxy's callback path is
+  # /oauth2/callback -- NOT auth.redirectUri's /auth/callback. Leave empty to
+  # derive <auth.redirectUri origin>/oauth2/callback.
+  redirectUrl: ""
+  # Secret name/key holding the cookie signing+encryption key. An empty name
+  # reuses auth.sessionSecretRef. The value MUST be exactly 16, 24 or 32
+  # bytes (raw, or base64url of one of those), e.g.
+  # python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
+  cookieSecretRef: ""
+  cookieSecretKey: session-secret
+  # Source CIDRs allowed to set X-Forwarded-* (empty = oauth2-proxy's
+  # back-compat "trust every peer", which logs a startup warning; set the
+  # ingress/gateway pod CIDR in production).
+  trustedProxyIps: []
+  # Extra `--flag=value` args appended verbatim (escape hatch).
+  extraArgs: []
 
 # workspace execution pods (sandbox daemon)
 workspace:
@@ -40,6 +79,14 @@ ingress:
   className: ""
   host: ""
   tlsSecret: ""
+  # Extra annotations for this Ingress. nginx-ingress buffers proxied
+  # responses and times out idle streams, which silently breaks the SSE
+  # stream (/plugins/events) and the WebSocket (/api/remote.mux):
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  # Istio/Envoy (virtualservice.yaml) streams by default and needs none.
+  annotations: {}
 
 resources: {}
 nodeSelector: {}

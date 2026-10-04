@@ -9,6 +9,9 @@ spec:
   selector:
     app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
   ports:
+    # The oauth2-proxy sidecar is the only exposed port. dsh web ({{ .Values.dshWeb.port }})
+    # binds 127.0.0.1 and must never be a Service target -- reaching it
+    # directly would bypass authentication entirely.
     - name: http
-      port: 3080
-      targetPort: dsh-web
+      port: {{ .Values.oauth2Proxy.port }}
+      targetPort: http

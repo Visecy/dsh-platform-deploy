@@ -5,6 +5,10 @@ metadata:
   name: {{ include "dsh-control-plane.fullname" . }}
   labels:
     {{- include "dsh-control-plane.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}
@@ -22,6 +26,9 @@ spec:
           - path: /
             pathType: Prefix
             backend:
+              # resolves to the oauth2-proxy sidecar port (service.yaml);
+              # WebSocket/SSE tuning, if the class needs it, is in
+              # ingress.annotations (nginx does, Istio/Envoy does not).
               service:
                 name: {{ include "dsh-control-plane.fullname" . }}
                 port:

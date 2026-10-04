@@ -20,11 +20,19 @@ spec:
       securityContext:
         fsGroup: 1000
       containers:
-        # ── dsh web platform image: self-contained (plugins + privileged
-        #    patch baked in at /opt/dsh-home by the release pipeline).
+        # ── dsh web platform image: self-contained (plugins baked in at
+        #    /opt/dsh-home by the release pipeline).
         #    Runtime DSH_HOME must be writable (profile synthesis writes
         #    cordis.yml): override to the emptyDir volume and copy the
-        #    baked-in home on start. ────────────────────────────────────────
+        #    baked-in home on start.
+        #
+        #    --host 127.0.0.1 is half of the authentication design, not a
+        #    preference: DSH trusts the identity headers it receives, so it
+        #    must be unreachable except through the sidecar in this pod. The
+        #    other half is the profile's webserver row (owned by the
+        #    dsh-platform repo) -- it must bind 127.0.0.1 as well; `dsh web`
+        #    already rejects `--host 0.0.0.0` at the CLI, and no Service or
+        #    NetworkPolicy entry exposes this port. ─────────────────────────
         - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -36,7 +44,7 @@ spec:
               if [ -d /opt/dsh-home/profiles ]; then
                 cp -r /opt/dsh-home/. /home/node/.dsh/
               fi
-              exec dsh web --port "{{ .Values.dshWeb.port }}" \
+              exec dsh web --host "127.0.0.1" --port "{{ .Values.dshWeb.port }}" \
                 {{- range .Values.dshWeb.trustedHosts }}
                 --trusted-host {{ . | quote }} \
                 {{- end }}
@@ -91,6 +99,120 @@ spec:
               drop: ["ALL"]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        # ── oauth2-proxy sidecar: the pod's only network entry point. It
+        #    authenticates the user against the existing OIDC application
+        #    (cookie session -- stateless, nothing to persist) and proxies to
+        #    the loopback-bound container above. No volume: it must never be
+        #    able to write state to disk. ───────────────────────────────────
+        {{- $cookieSecretRef := .Values.oauth2Proxy.cookieSecretRef | default .Values.auth.sessionSecretRef }}
+        {{- $redirectUrl := .Values.oauth2Proxy.redirectUrl }}
+        {{- if not $redirectUrl }}
+        {{- $parsed := urlParse .Values.auth.redirectUri }}
+        {{- if and $parsed.scheme $parsed.host }}
+        {{- $redirectUrl = printf "%s://%s/oauth2/callback" $parsed.scheme $parsed.host }}
+        {{- end }}
+        {{- end }}
+        - name: oauth2-proxy
+          image: "{{ .Values.oauth2Proxy.image }}:{{ .Values.oauth2Proxy.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            # -- identity
+            - --provider=oidc
+            - --oidc-issuer-url={{ required "auth.oidcIssuer required" .Values.auth.oidcIssuer }}
+            - --client-id={{ required "auth.oidcClientId required" .Values.auth.oidcClientId }}
+            - --scope={{ .Values.oauth2Proxy.scope }}
+            - --oidc-groups-claim={{ .Values.oauth2Proxy.groupsClaim }}
+            # the IdP application assignment is the authorization boundary
+            - --email-domain=*
+            # single-provider deployment: skip the interstitial sign-in page
+            # and redirect straight to the IdP
+            - --skip-provider-button=true
+            # stateless session: the whole session lives in the cookie
+            - --session-store-type=cookie
+            # -- upstream (no path -> route "/" -> every request)
+            - --upstream=http://127.0.0.1:{{ .Values.dshWeb.port }}
+            # Identity headers. --pass-user-headers (default true) is what
+            # actually reaches the DSH process: X-Forwarded-User,
+            # X-Forwarded-Groups, X-Forwarded-Email,
+            # X-Forwarded-Preferred-Username. --set-xauthrequest adds the
+            # X-Auth-Request-* family, which oauth2-proxy emits on the
+            # RESPONSE (nginx auth_request style) and which therefore stays
+            # browser-facing; it is kept because the identity contract names
+            # it, but identity-bridge must read X-Forwarded-User /
+            # X-Forwarded-Groups (see docs/deployment.md).
+            - --pass-user-headers=true
+            - --set-xauthrequest=true
+            # dsh web's /api Host/Origin fence validates the Host header, so
+            # the original Host must survive this hop (default, pinned here
+            # because it is load-bearing).
+            - --pass-host-header=true
+            # trust X-Forwarded-Proto/Host from the ingress/gateway
+            - --reverse-proxy=true
+            - --http-address=0.0.0.0:{{ .Values.oauth2Proxy.port }}
+            {{- with $redirectUrl }}
+            - --redirect-url={{ . }}
+            {{- end }}
+            # -- long-lived connections: /api/remote.mux (WebSocket) and
+            # /plugins/events (SSE) must not be buffered or cut. FlushInterval
+            # is the streaming flush period and upstream-timeout is a
+            # response-header timeout (not a whole-request timeout), so a
+            # generous value is safe for streams and covers a cold upstream.
+            - --flush-interval=1s
+            - --upstream-timeout=1h
+            - --silence-ping-logging=true
+            {{- range .Values.oauth2Proxy.trustedProxyIps }}
+            - --trusted-proxy-ip={{ . }}
+            {{- end }}
+            {{- range .Values.oauth2Proxy.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            # Secrets are supplied through oauth2-proxy's documented
+            # OAUTH2_PROXY_* environment mapping (equivalent to
+            # --client-secret / --cookie-secret) so that no secret value ever
+            # appears in the pod spec's args. The cookie secret must decode to
+            # exactly 16, 24 or 32 bytes.
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "auth.oidcClientSecretRef required" .Values.auth.oidcClientSecretRef }}
+                  key: oidc-client-secret
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "oauth2Proxy.cookieSecretRef or auth.sessionSecretRef required" $cookieSecretRef }}
+                  key: {{ .Values.oauth2Proxy.cookieSecretKey }}
+          ports:
+            - containerPort: {{ .Values.oauth2Proxy.port }}
+              name: http
+          # /ping is served from oauth2-proxy's pre-auth chain, so probes do
+          # not need a session.
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+            timeoutSeconds: 3
+          securityContext:
+            # 65532 is the USER declared by the pinned upstream image; setting
+            # it explicitly keeps runAsNonRoot verifiable for variant tags
+            # (e.g. -alpine) that declare no numeric user.
+            runAsUser: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.oauth2Proxy.resources | nindent 12 }}
       volumes:
         - name: dsh-home
           emptyDir: {}
