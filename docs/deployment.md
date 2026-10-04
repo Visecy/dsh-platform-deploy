@@ -103,6 +103,7 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
   --set auth.oidcClientId=<client-id> \
   --set auth.redirectUri=https://dsh.<domain>/auth/callback \
   --set oauth2Proxy.redirectUrl=https://dsh.<domain>/oauth2/callback \
+  --set oauth2Proxy.publicOrigin=https://dsh.<domain> \
   --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
   --set oauth2Proxy.cookieSecretKey=cookie-secret \
   --set auth.oidcClientSecretRef=dsh-oidc \
@@ -120,6 +121,26 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
   --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-read-timeout"=3600 \
   --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-send-timeout"=3600
 ```
+
+### 公网 origin：`DSH_PUBLIC_ORIGIN`
+
+identity-bridge 用官方 launch-token handoff 提供首页：需要重定向时调用
+`authenticatedUrl()`，其 origin 取自应用容器的 `DSH_PUBLIC_ORIGIN`。chart 按以下顺序解析
+（命中即止），并把它作为普通 env 注入 dsh-web 容器：
+
+1. `oauth2Proxy.publicOrigin`（`https://<host>`，无尾斜杠；推荐显式设置）
+2. `oauth2Proxy.redirectUrl` 的 origin
+3. `auth.redirectUri` 的 origin
+4. `ingress.enabled=true` 时的 `https://<ingress.host>`
+5. `istio.enabled=true` 时的 `https://<istio.host>`
+
+以上都取不到时 chart **渲染即失败**，不会静默回落到"从请求推导"。显式值不是
+`scheme://host`（带路径或尾斜杠）时同样直接报错。
+
+为什么要钉住：不设时 handoff 会用请求的 `X-Forwarded-Proto`/`Host` 推导 origin，而这组头
+在 `oauth2Proxy.trustedProxyIps` 为空时任何客户端都能提供。应用自身的 authority fence
+（未知 authority → 403 且不带 `Location`）目前挡住了带 token 的 URL 外泄，但那是兜底，
+不是主控制；生产环境请同时设置 `oauth2Proxy.publicOrigin` 与 `oauth2Proxy.trustedProxyIps`。
 
 ### 迁移到 sidecar 必须做的三件事
 
@@ -140,6 +161,12 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
 
 - 未登录访问 `/` -> 302 到 IdP（`--skip-provider-button=true`，无中间登录页）
 - 登录回跳 -> sidecar 会话 cookie 生效，页面与 `/api` 正常（无 401/403）
+- 应用容器 env 已收敛（认证变量只存在于 sidecar）：
+  `kubectl -n dsh-platform get deploy dsh-control-plane-dsh-control-plane -o jsonpath='{range .spec.template.spec.containers[?(@.name=="dsh-web")].env[*]}{.name}={.value}{"\n"}{end}'`
+  -> 有字面值的只有 `DSH_HOME` / `DSH_TELEMETRY_DISABLED` / `DSH_PUBLIC_ORIGIN` /
+  `WS_NAMESPACE` / `WS_IMAGE`（`DSH_PG_CONNECTION_STRING` 来自 Secret），
+  `DSH_PUBLIC_ORIGIN` 必须等于部署的公网 origin；应用侧不再有任何 OIDC/会话变量
+  （认证变量只存在于 sidecar，见 `OAUTH2_PROXY_*`）
 - `kubectl logs <pod> -c oauth2-proxy`：`trusted-proxy-ip` 未设置时会有启动告警
   （`WARNING: --reverse-proxy is enabled but no --trusted-proxy-ip CIDRs were configured.
   All connecting IPs are trusted to supply X-Forwarded-* headers by default (0.0.0.0/0, ::/0)`），

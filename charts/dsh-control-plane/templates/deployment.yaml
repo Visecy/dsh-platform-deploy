@@ -19,6 +19,44 @@ spec:
         - name: ghcr-pull
       securityContext:
         fsGroup: 1000
+      # ── DSH_PUBLIC_ORIGIN: pin the handoff origin ───────────────────────
+      # identity-bridge (platform profile row: `publicOrigin: !!js
+      # process.env.DSH_PUBLIC_ORIGIN`) serves the index through the official
+      # launch-token handoff and, on the redirect leg, sends the browser to
+      # `authenticatedUrl()`. With no origin configured that origin is derived
+      # from the REQUEST's X-Forwarded-Proto/Host -- headers a client can
+      # influence unless oauth2Proxy.trustedProxyIps pins the trusted proxy
+      # CIDR. The app's own authority fence (unknown authority -> 403 with no
+      # Location) is what keeps that from emitting a tokenized URL today; this
+      # value removes the reliance instead of stacking another guard.
+      #
+      # Resolution order (first hit wins):
+      #   1. oauth2Proxy.publicOrigin            (explicit; recommended)
+      #   2. origin of oauth2Proxy.redirectUrl   (the IdP callback URL)
+      #   3. origin of auth.redirectUri          (same origin, older key)
+      #   4. https://<ingress.host>   when ingress.enabled
+      #   5. https://<istio.host>     when istio.enabled
+      # Nothing derivable is a render error: never fall back to the request.
+      {{- $publicOrigin := .Values.oauth2Proxy.publicOrigin | trimSuffix "/" }}
+      {{- if not $publicOrigin }}
+      {{- range (list .Values.oauth2Proxy.redirectUrl .Values.auth.redirectUri) }}
+      {{- if not $publicOrigin }}
+      {{- $parsed := urlParse . }}
+      {{- if and $parsed.scheme $parsed.host }}
+      {{- $publicOrigin = printf "%s://%s" $parsed.scheme $parsed.host }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+      {{- if and (not $publicOrigin) .Values.ingress.enabled .Values.ingress.host }}
+      {{- $publicOrigin = printf "https://%s" .Values.ingress.host }}
+      {{- end }}
+      {{- if and (not $publicOrigin) .Values.istio.enabled .Values.istio.host }}
+      {{- $publicOrigin = printf "https://%s" .Values.istio.host }}
+      {{- end }}
+      {{- if and $publicOrigin (not (regexMatch "^https?://[^/]+$" $publicOrigin)) }}
+      {{- fail (printf "public origin %q is not scheme://host (no path, no trailing slash): check oauth2Proxy.publicOrigin / oauth2Proxy.redirectUrl / auth.redirectUri, e.g. https://dsh.example.com" $publicOrigin) }}
+      {{- end }}
       containers:
         # ── dsh web platform image: self-contained (plugins baked in at
         #    /opt/dsh-home by the release pipeline).
@@ -58,24 +96,16 @@ spec:
               value: /home/node/.dsh
             - name: DSH_TELEMETRY_DISABLED
               value: "1"
-            - name: OIDC_ISSUER
-              value: {{ .Values.auth.oidcIssuer | quote }}
-            - name: OIDC_CLIENT_ID
-              value: {{ .Values.auth.oidcClientId | quote }}
-            - name: OIDC_REDIRECT_URI
-              value: {{ .Values.auth.redirectUri | quote }}
-            - name: ADMIN_GROUPS
-              value: {{ .Values.auth.adminGroups | quote }}
-            - name: OIDC_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ required "auth.oidcClientSecretRef required" .Values.auth.oidcClientSecretRef }}
-                  key: oidc-client-secret
-            - name: SESSION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ required "auth.sessionSecretRef required" .Values.auth.sessionSecretRef }}
-                  key: session-secret
+            # Public origin (scheme://host, no trailing slash) of THIS
+            # deployment; see the resolution block above. Load-bearing: it is
+            # what makes the launch-token handoff redirect independent of
+            # X-Forwarded-Proto/Host.
+            - name: DSH_PUBLIC_ORIGIN
+              value: {{ required "cannot derive the deployment's public origin: set oauth2Proxy.publicOrigin to https://<host> (no trailing slash), or set oauth2Proxy.redirectUrl / auth.redirectUri, or enable ingress/istio with a host" $publicOrigin | quote }}
+            # No OIDC_* / ADMIN_GROUPS / SESSION_SECRET here: the in-process
+            # gate that read them is retired and the app consumes none of
+            # them. The sidecar below reads its own OAUTH2_PROXY_* names, and
+            # the auth.* values feed its args.
             - name: WS_NAMESPACE
               value: {{ .Release.Namespace | quote }}
             - name: WS_IMAGE

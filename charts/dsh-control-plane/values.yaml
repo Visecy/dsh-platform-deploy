@@ -34,13 +34,27 @@ dshWeb:
   # because the sidecar runs with --pass-host-header=true.
   trustedHosts: []
 
+# OIDC settings. These feed the oauth2-proxy SIDECAR (args + OAUTH2_PROXY_*
+# env), NOT the dsh web container: the app reads no OIDC_* / ADMIN_GROUPS /
+# SESSION_SECRET variable any more and receives the verified identity only as
+# X-Forwarded-User/-Groups. Secret refs point at existing Secrets; keep the
+# values out of the release.
 auth:
   oidcIssuer: ""
   oidcClientId: ""
+  # Public redirect URI. Only its ORIGIN is consumed: with
+  # oauth2Proxy.redirectUrl empty the chart derives
+  # <origin>/oauth2/callback for the sidecar, and the origin is also a
+  # fallback source for oauth2Proxy.publicOrigin. The path part is
+  # documentation, not a route this app serves -- register
+  # <origin>/oauth2/callback at the IdP (see config/authentik.example.md).
   redirectUri: ""
-  adminGroups: "dsh-admins"
   # secret refs
+  # client secret for the sidecar (key: oidc-client-secret)
   oidcClientSecretRef: ""
+  # session-secret (key: session-secret); used as the sidecar cookie secret
+  # only when oauth2Proxy.cookieSecretRef is empty, and it must then decode to
+  # exactly 16/24/32 bytes
   sessionSecretRef: ""
 
 # oauth2-proxy sidecar: terminates the user session in an encrypted cookie
@@ -65,13 +79,25 @@ oauth2Proxy:
   port: 4180
   resources: {}
   # OIDC scopes requested at the IdP. `groups` must stay: without it the
-  # groups claim is absent and the DSH admin gate sees no groups.
+  # groups claim is absent and identity-bridge's X-Forwarded-Groups (the
+  # principal's groups, exposed via ctx.dshAuth) carries nothing.
   scope: "openid email profile groups"
   # OIDC claim that carries the user's groups.
   groupsClaim: groups
+  # Public origin browsers use: scheme://host, NO trailing slash (e.g.
+  # https://dsh.example.com). Injected into the app container as
+  # DSH_PUBLIC_ORIGIN, which identity-bridge uses as the origin of the
+  # launch-token handoff redirect. Leave empty to derive it from, in order,
+  # the origin of redirectUrl, the origin of auth.redirectUri,
+  # https://<ingress.host> (when ingress.enabled), https://<istio.host> (when
+  # istio.enabled). If none of those is set the chart FAILS to render on
+  # purpose: with no pinned origin the handoff would derive it from the
+  # request's X-Forwarded-Proto/Host, which a client can influence unless
+  # trustedProxyIps is set (see below).
+  publicOrigin: ""
   # Redirect URL registered at the IdP. oauth2-proxy's callback path is
-  # /oauth2/callback -- NOT auth.redirectUri's /auth/callback. Leave empty to
-  # derive <auth.redirectUri origin>/oauth2/callback.
+  # /oauth2/callback -- NOT auth.redirectUri's path, which is never served.
+  # Leave empty to derive <auth.redirectUri origin>/oauth2/callback.
   redirectUrl: ""
   # Secret name/key holding the cookie signing+encryption key. An empty name
   # reuses auth.sessionSecretRef. The value MUST be exactly 16, 24 or 32
