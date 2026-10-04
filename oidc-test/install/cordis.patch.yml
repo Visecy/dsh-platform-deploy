@@ -1,20 +1,25 @@
-- id: webserver
-  disabled: true
+# oidc-test profile patch -- mirrors the platform profile
+# (dsh-platform: docker/profiles/web.cordis.patch.yml) on the auth seam.
+#
+# The official `webserver` row is intentionally NOT disabled and NOT replaced:
+# `dsh web --host/--port` feeds it through `webStartup`, which is exactly what
+# the deploy chart relies on (`--host 127.0.0.1`, reachable only through the
+# oauth2-proxy sidecar in the same pod). The retired wiring used to disable this
+# row and insert a webserver fork plus an in-process OIDC gate plugin; neither
+# of those packages registers a DSH plugin any more (see install-plugins.sh,
+# which lists them explicitly so they are not reintroduced).
+#
+# Authentication is terminated by the sidecar. It injects the verified
+# principal into the UPSTREAM request as `X-Forwarded-User` /
+# `X-Forwarded-Groups` (--pass-user-headers); identity-bridge reads only that
+# pair. `X-Auth-Request-*` is client-controllable in this topology (oauth2-proxy
+# never strips it) and must never be read as identity.
+#
+# `publicOrigin` stays unset here: the plugin then derives the handoff origin
+# from the request's X-Forwarded-Proto/Host, which is what the istio
+# VirtualService in this rig forwards.
 - insert:
-    - id: webserver-gated
-      name: 'dsh-web-auth'
-      inject: [webStartup]
+    - id: identity-bridge
+      name: '@visecy/dsh-identity-bridge'
       config:
-        host: !!js ctx.webStartup.host ?? '127.0.0.1'
-        port: !!js ctx.webStartup.port ?? 3080
-    - id: dsh-auth-oidc
-      name: '@visecy/dsh-auth-oidc'
-      config:
-        oidc:
-          issuer: !!js process.env.OIDC_ISSUER
-          clientId: !!js process.env.OIDC_CLIENT_ID
-          clientSecret: !!js process.env.OIDC_CLIENT_SECRET
-          redirectUri: !!js process.env.OIDC_REDIRECT_URI
-          scopes: [openid, profile, email, groups]
-        sessionSecret: !!js process.env.SESSION_SECRET
-        adminGroups: !!js (process.env.ADMIN_GROUPS ?? 'dsh-admins').split(',')
+        publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN
