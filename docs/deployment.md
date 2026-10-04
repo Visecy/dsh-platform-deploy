@@ -47,21 +47,30 @@ dsh-client-connection 的 Host/Origin fence 保护；sidecar 以 `--pass-host-he
 
 4180 的入口规则则刻意不限来源（给 ingress controller / 内部网关 / port-forward 用）。
 
-> **身份头**：`--set-xauthrequest` 产生的 `X-Auth-Request-*` 是返回给**浏览器**的
-> 响应头（nginx auth_request 风格）；真正到达 DSH 进程的是请求头
-> `X-Forwarded-User` / `X-Forwarded-Groups` / `X-Forwarded-Email` /
-> `X-Forwarded-Preferred-Username`（`--pass-user-headers=true` 默认开启）。
-> identity-bridge 读 `X-Forwarded-*`。已在本地用镜像层里取出的 v7.15.5 二进制实测。
+> **身份头契约（先记住这一句）**：`X-Forwarded-User`/`-Groups` 是唯一可信的上游身份对；
+> `X-Auth-Request-*` 在本拓扑下由客户端可控，任何组件都**不得**把它当身份读取。
+> identity-bridge 只读 `X-Forwarded-*`。
 >
-> **实测结果（probe：`.dshcmp/tmp/header_probe.sh`，带伪造头的一次登录请求）**：
-> 客户端伪造的 `X-Forwarded-User/-Groups/-Email` 会在注入前被删除，上游只看到会话里的
-> 真实用户（`tester` / `testgroup`）；但客户端伪造的 `X-Auth-Request-*` **不会**被删除，
-> 上游原样收到 `X-Auth-Request-User: mallory`。原因：oauth2-proxy 只清理它作为**请求头**
-> 注入的那批名字（`pkg/middleware/headers.go` 的 strip 链只覆盖
-> `InjectRequestHeaders`），而 `X-Auth-Request-*` 是**响应头**家族，加不加
-> `--set-xauthrequest` 都一样。结论：**任何上游组件都不得把 `X-Auth-Request-*` 当身份来源**，
-> identity-bridge 只读 `X-Forwarded-*`；本 chart 无法在 legacy 选项下清理这批名字
-> （alpha config 会整体替换 upstream/header 装配，见 implementer note）。
+> 真正到达 DSH 进程的是请求头 `X-Forwarded-User` / `X-Forwarded-Groups` /
+> `X-Forwarded-Email` / `X-Forwarded-Preferred-Username`
+> （`--pass-user-headers=true`，本 chart 固定开启）。本 chart **刻意不设置
+> `--set-xauthrequest`**：该选项只把 `X-Auth-Request-*` 加到**浏览器响应**上，本部署
+> 没有任何组件消费这批名字，开着它反而会让后来的维护者误以为这个家族可信 ——
+> 那才会变成真正的冒充漏洞。去掉它对 X-Forwarded-* 转发路径是安全中性的
+> （实测：开与关，上游收到的头完全一致）。
+>
+> **实测结果（probe：`.dshcmp/tmp/header_probe.sh`，带伪造头的一次登录请求；
+> 二进制取自 pinned v7.15.5 镜像层）**：客户端伪造的 `X-Forwarded-User/-Groups/-Email`
+> 会在注入前被删除，上游只看到会话里的真实用户（`tester` / `testgroup`）；
+> 但客户端伪造的 `X-Auth-Request-*` **不会**被删除，上游原样收到
+> `X-Auth-Request-User: mallory` —— **与是否设置 `--set-xauthrequest` 无关**
+> （用 `--set-xauthrequest=false` 重跑结果相同，差别只在**响应**头）。原因：oauth2-proxy
+> 只清理它作为**请求头**注入的那批名字（`pkg/middleware/headers.go` 的 strip 链只覆盖
+> `InjectRequestHeaders`），而 `X-Auth-Request-*` 是**响应头**家族，从来不在这条链里。
+>
+> **纵深防御（仅记录，未实现）**：若将来真有组件需要消费 `X-Auth-Request-*`，
+> 可在 ingress 层剥离这批请求头（如 nginx `configuration-snippet`）；legacy 选项模式下
+> 本 chart 自己清不掉它们（alpha config 会整体替换 upstream/header 装配，属另一次重构）。
 
 
 ## 前置

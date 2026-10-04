@@ -136,26 +136,39 @@ spec:
             - --session-store-type=cookie
             # -- upstream (no path -> route "/" -> every request)
             - --upstream=http://127.0.0.1:{{ .Values.dshWeb.port }}
-            # Identity headers. --pass-user-headers (default true) is what
-            # actually reaches the DSH process: X-Forwarded-User,
-            # X-Forwarded-Groups, X-Forwarded-Email,
-            # X-Forwarded-Preferred-Username. --set-xauthrequest adds the
-            # X-Auth-Request-* family, which oauth2-proxy emits on the
-            # RESPONSE (nginx auth_request style) and which therefore stays
-            # browser-facing; it is kept because the identity contract names
-            # it, but identity-bridge must read X-Forwarded-User /
-            # X-Forwarded-Groups (see docs/deployment.md).
+            # Identity headers. TRUSTED UPSTREAM PAIR: X-Forwarded-User /
+            # X-Forwarded-Groups. --pass-user-headers (default true, pinned
+            # here) is what makes the upstream identity work: oauth2-proxy
+            # strips any client-supplied copy of those names and then injects
+            # the session's verified principal as X-Forwarded-User,
+            # X-Forwarded-Groups, X-Forwarded-Email and
+            # X-Forwarded-Preferred-Username REQUEST headers. identity-bridge
+            # reads exactly X-Forwarded-User / X-Forwarded-Groups (see
+            # docs/deployment.md).
             #
-            # MEASURED against v7.15.5 (probe: .dshcmp/tmp/header_probe.sh):
-            # client-supplied X-Forwarded-* are deleted before injection, but
-            # client-supplied X-Auth-Request-* are NOT -- oauth2-proxy only
-            # strips the headers it injects as REQUEST headers, and this family
-            # is wired as RESPONSE headers (same result with
-            # --set-xauthrequest=false). They reach the upstream carrying the
-            # client's values, so nothing behind this proxy may treat
-            # X-Auth-Request-* as identity.
+            # X-Auth-Request-* is NOT identity in this topology: it is
+            # client-controllable and must never be read as one. MEASURED
+            # against v7.15.5 (probe: .dshcmp/tmp/header_probe.sh):
+            # client-supplied X-Auth-Request-User/-Groups/-Email reach the
+            # upstream unchanged -- oauth2-proxy only strips the headers it
+            # injects as REQUEST headers, and that family is wired as RESPONSE
+            # headers, so it is never in the strip list.
+            #
+            # --set-xauthrequest is deliberately NOT set. It only adds that
+            # family to the browser RESPONSE, nothing in this deployment
+            # consumes it, and switching it on invites a future reader to treat
+            # those names as trustworthy -- a real spoofing hole if anything
+            # behind this proxy ever read them. Dropping it is security-neutral
+            # for the X-Forwarded-* passthrough (measured: identical upstream
+            # headers with the flag on and off); the flags here are the ones
+            # that carry the identity.
+            #
+            # HARDENING (comment only, intentionally not implemented): if a
+            # future component ever does need to consume X-Auth-Request-*, the
+            # available defence in depth is an ingress-level strip of those
+            # request headers (e.g. an nginx configuration-snippet); in
+            # legacy-option mode this chart cannot remove them itself.
             - --pass-user-headers=true
-            - --set-xauthrequest=true
             # dsh web's /api Host/Origin fence validates the Host header, so
             # the original Host must survive this hop (default, pinned here
             # because it is load-bearing).

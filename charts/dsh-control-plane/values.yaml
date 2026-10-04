@@ -45,10 +45,18 @@ auth:
 
 # oauth2-proxy sidecar: terminates the user session in an encrypted cookie
 # (stateless -- no Redis, no DB, no volume) and reverse-proxies to the dsh web
-# container, adding the verified identity as request headers
-# (X-Forwarded-User / -Groups; see docs/deployment.md and
-# templates/deployment.yaml). It is the pod's only published entry point; read
-# the ordering note above before relying on dsh web being loopback-only.
+# container, adding the verified identity as request headers.
+#
+# IDENTITY CONTRACT: X-Forwarded-User / X-Forwarded-Groups (--pass-user-headers)
+# are the trusted upstream pair; X-Auth-Request-* is client-controllable in this
+# topology and MUST never be read as identity. The chart therefore does NOT set
+# --set-xauthrequest: it would only add that family to the browser response and
+# advertise it as trustworthy. If a future component ever does need to consume
+# X-Auth-Request-*, strip it at the ingress -- the chart cannot remove it here.
+# See templates/deployment.yaml and docs/deployment.md.
+#
+# It is the pod's only published entry point; read the ordering note above
+# before relying on dsh web being loopback-only.
 oauth2Proxy:
   image: quay.io/oauth2-proxy/oauth2-proxy
   # pinned; the sidecar's own image runs as uid 65532 (distroless, non-root)
