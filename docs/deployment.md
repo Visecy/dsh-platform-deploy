@@ -68,8 +68,10 @@ dsh-client-connection 的 Host/Origin fence 保护；sidecar 以 `--pass-host-he
 
 1. authentik OIDC 应用（见 config/authentik.example.md）：平台 client + kube-apiserver client
 2. 镜像：`ghcr.io/visecy/dsh-web-platform:<tag>`（自包含控制面：官方 @deepseek-ai/dsh
-   0.1.2-rc.1 + @visecy 平台插件 + patch-dsh 补丁，tag 与插件 npm 版本一致）、
-   `ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:<tag>`、可选 `visecy/dsh-auth-gate`（sidecar 形态已不再使用）
+   0.1.2-rc.1 + @visecy 平台插件，tag 与插件 npm 版本一致）、
+   `ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:<tag>`
+   （不需要 auth-gate 镜像：进程内 gate 及其 kaniko 构建清单已删除，认证由本 chart
+   部署的 oauth2-proxy sidecar 承担）
 3. helm 3 + kubeconfig
 
 ## 安装
