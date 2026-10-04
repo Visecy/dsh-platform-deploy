@@ -145,6 +145,15 @@ spec:
             # browser-facing; it is kept because the identity contract names
             # it, but identity-bridge must read X-Forwarded-User /
             # X-Forwarded-Groups (see docs/deployment.md).
+            #
+            # MEASURED against v7.15.5 (probe: .dshcmp/tmp/header_probe.sh):
+            # client-supplied X-Forwarded-* are deleted before injection, but
+            # client-supplied X-Auth-Request-* are NOT -- oauth2-proxy only
+            # strips the headers it injects as REQUEST headers, and this family
+            # is wired as RESPONSE headers (same result with
+            # --set-xauthrequest=false). They reach the upstream carrying the
+            # client's values, so nothing behind this proxy may treat
+            # X-Auth-Request-* as identity.
             - --pass-user-headers=true
             - --set-xauthrequest=true
             # dsh web's /api Host/Origin fence validates the Host header, so

@@ -51,7 +51,17 @@ dsh-client-connection 的 Host/Origin fence 保护；sidecar 以 `--pass-host-he
 > 响应头（nginx auth_request 风格）；真正到达 DSH 进程的是请求头
 > `X-Forwarded-User` / `X-Forwarded-Groups` / `X-Forwarded-Email` /
 > `X-Forwarded-Preferred-Username`（`--pass-user-headers=true` 默认开启）。
-> identity-bridge 读 `X-Forwarded-*`。已在本地用镜像内的 v7.15.5 二进制实测。
+> identity-bridge 读 `X-Forwarded-*`。已在本地用镜像层里取出的 v7.15.5 二进制实测。
+>
+> **实测结果（probe：`.dshcmp/tmp/header_probe.sh`，带伪造头的一次登录请求）**：
+> 客户端伪造的 `X-Forwarded-User/-Groups/-Email` 会在注入前被删除，上游只看到会话里的
+> 真实用户（`tester` / `testgroup`）；但客户端伪造的 `X-Auth-Request-*` **不会**被删除，
+> 上游原样收到 `X-Auth-Request-User: mallory`。原因：oauth2-proxy 只清理它作为**请求头**
+> 注入的那批名字（`pkg/middleware/headers.go` 的 strip 链只覆盖
+> `InjectRequestHeaders`），而 `X-Auth-Request-*` 是**响应头**家族，加不加
+> `--set-xauthrequest` 都一样。结论：**任何上游组件都不得把 `X-Auth-Request-*` 当身份来源**，
+> identity-bridge 只读 `X-Forwarded-*`；本 chart 无法在 legacy 选项下清理这批名字
+> （alpha config 会整体替换 upstream/header 装配，见 implementer note）。
 
 
 ## 前置
