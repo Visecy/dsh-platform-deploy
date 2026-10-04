@@ -13,4 +13,7 @@ spec:
         - destination:
             host: dsh-control-plane-dsh-control-plane.dsh-platform.svc.cluster.local
             port:
-              number: 3080
+              # the chart's Service publishes only the oauth2-proxy sidecar
+              # port (4180); 3080 no longer exists, so the old value failed
+              # closed with 503
+              number: 4180
