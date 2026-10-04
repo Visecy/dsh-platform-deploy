@@ -118,8 +118,10 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
 
 - 未登录访问 `/` -> 302 到 IdP（`--skip-provider-button=true`，无中间登录页）
 - 登录回跳 -> sidecar 会话 cookie 生效，页面与 `/api` 正常（无 401/403）
-- `kubectl logs <pod> -c oauth2-proxy` 无启动告警（`trusted-proxy-ip` 未设置时会
-  打印 "trusting all source IPs"）
+- `kubectl logs <pod> -c oauth2-proxy`：`trusted-proxy-ip` 未设置时会有启动告警
+  （`WARNING: --reverse-proxy is enabled but no --trusted-proxy-ip CIDRs were configured.
+  All connecting IPs are trusted to supply X-Forwarded-* headers by default (0.0.0.0/0, ::/0)`），
+  生产部署不应出现这条告警（见"已知限制"）
 - `kubectl logs` 检查无 cordis 装配告警（未知 patch 行会打印 "patch: entry ... not found"）
 
 ## 工作区运行时
