@@ -21,7 +21,9 @@ data:
       - id: dsh-platform
         name: dsh platform
         redirectURIs:
-          - 'https://dsh.svc.visecy.top/auth/callback'
+          # oauth2-proxy sidecar's callback path. The old /auth/callback
+          # belonged to the deleted in-process gate and is no longer served.
+          - 'https://dsh.svc.visecy.top/oauth2/callback'
         secret: test-client-secret
     enablePasswordDB: true
     staticPasswords:

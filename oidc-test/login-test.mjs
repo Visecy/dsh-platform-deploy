@@ -1,5 +1,13 @@
 // End-to-end OIDC login flow test: browser-like simulation
-// dsh gate -> dex (authorize) -> login form -> callback -> cookie -> gated API
+// oauth2-proxy sidecar -> dex (authorize) -> login form -> /oauth2/callback ->
+// sidecar session cookie -> gated API proxied to dsh web.
+//
+// The sidecar (not the deleted in-process gate) terminates the session, so the
+// assertions below follow the pinned v7.15.5 behavior, measured against the
+// real binary: the session cookie is `_oauth2_proxy` (with --cookie-secure=true
+// over https it is `__Host-_oauth2_proxy`), and an unauthenticated API request
+// is 401 only when it looks like a JSON/AJAX call -- a plain fetch gets a 302
+// to the IdP instead.
 const BASE = process.env.DSH_URL ?? 'https://dsh.svc.visecy.top'
 const USER = process.env.TEST_USER ?? 'admin@test.local'
 const PASS = process.env.TEST_PASS ?? 'test-password'
@@ -72,17 +80,27 @@ const r4 = await fetch(postUrl.toString(), {
 storeCookies(r4.headers)
 ok('login POST -> 302/303 back to app', r4.status === 302 || r4.status === 303, '-> ' + (r4.headers.get('location') ?? '').slice(0, 120))
 const callbackUrl = r4.headers.get('location')
+// the IdP must hand back to the sidecar's callback path, not the retired
+// gate's /auth/callback (dex would have errored instead of redirecting)
+ok('IdP redirects to /oauth2/callback', (callbackUrl ?? '').includes('/oauth2/callback'), '-> ' + (callbackUrl ?? '').slice(0, 120))
 
 // 5. callback -> session cookie
 const r5 = await get(callbackUrl)
-ok('callback -> 302 + session cookie', r5.status === 302 && cookieJar.has('dsh_session'), 'status ' + r5.status)
+const sessionCookie = [...cookieJar.keys()].find((name) => name.includes('oauth2_proxy'))
+ok('callback -> 302 + sidecar session cookie', r5.status === 302 && sessionCookie !== undefined,
+  'status ' + r5.status + ' cookie ' + (sessionCookie ?? '(none)'))
 
 // 6. gated API with cookie (expect non-401: proxied through to dsh web)
 const r6 = await get(BASE + '/api/session')
 ok('gated /api/session with cookie -> not 401', r6.status !== 401, 'status ' + r6.status)
 
-// 7. unauthenticated /api still rejected
-const r7 = await fetch(BASE + '/api/session', { redirect: 'manual', signal: AbortSignal.timeout(10000) })
-ok('fresh client /api/session -> 401', r7.status === 401, 'status ' + r7.status)
+// 7. unauthenticated /api still rejected. The JSON Accept header is what makes
+//    the sidecar answer 401 instead of 302-to-IdP (measured on v7.15.5).
+const r7 = await fetch(BASE + '/api/session', {
+  redirect: 'manual',
+  headers: { accept: 'application/json' },
+  signal: AbortSignal.timeout(10000),
+})
+ok('fresh client /api/session (Accept: json) -> 401', r7.status === 401, 'status ' + r7.status)
 
 console.log(process.exitCode ? 'RESULT: FAILED' : 'RESULT: ALL PASSED')
