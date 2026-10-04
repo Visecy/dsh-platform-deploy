@@ -7,7 +7,8 @@
   -> dsh-control-plane Pod（无状态：readOnlyRootFilesystem，无 PVC）
        oauth2-proxy sidecar :4180   OIDC 会话（cookie store，无 Redis/DB）
          └─ 向 dsh 注入身份头 X-Forwarded-User / -Groups（见下）
-       dsh web 127.0.0.1:3080       仅 loopback，Service 不指向它
+       dsh web 127.0.0.1:3080       本 chart 传 --host 127.0.0.1，Service 不指向
+                                    它；是否真的只绑 loopback 取决于镜像（见下）
          ├─ /api 网关（dsh-client-connection，Host/Origin fence）
          ├─ 前端与 workspace REST API
          └─ session-persistence-rdb / storage-db -> Postgres
@@ -17,11 +18,34 @@
 ```
 
 认证已外置到同 pod 的 oauth2-proxy sidecar：Service 只暴露 sidecar 端口
-（`http` → 4180），dsh web 只绑 `127.0.0.1`，所以身份头只可能由 sidecar 产生
-（结构性信任，而非策略性信任）。`--trusted-host`（即 `dshWeb.trustedHosts`）
-仍需列出公网 authority：DSH 0.1.2 起 `/api`（RPC/WS）由 dsh-client-connection
-的 Host/Origin fence 保护；sidecar 以 `--pass-host-header=true` 原样转发 Host，
-因此行为与直连一致，否则所有 `/api` 请求 403。
+（`http` → 4180），本 chart 以 `--host 127.0.0.1` 启动 dsh web 且没有任何 Service
+指向它，所以身份头只可能由 sidecar 产生（结构性信任，而非策略性信任）。`--trusted-host`
+（即 `dshWeb.trustedHosts`）仍需列出公网 authority：DSH 0.1.2 起 `/api`（RPC/WS）由
+dsh-client-connection 的 Host/Origin fence 保护；sidecar 以 `--pass-host-header=true`
+原样转发 Host，因此行为与直连一致，否则所有 `/api` 请求 403。
+
+### loopback 绑定：两种状态，别把目标当成现状
+
+"dsh web 只绑 loopback" 不是本 chart 单独能保证的事：**bind 由平台仓（dsh-platform）
+的 profile 决定**。平台仓正在删除硬编码 `host: '0.0.0.0'` 的 `webserver-gated` fork 行
+（`docker/profiles/web.cordis.patch.yml`）并恢复官方 webserver 行，与该 chart 改动属于
+同一变更集。本 chart 无法从外部区分这两种状态，请按**实际部署的镜像**判断：
+
+| 部署的镜像 | dsh web 监听 | pod IP:3080 路径的唯一屏障 |
+| --- | --- | --- |
+| 由改动前的 profile 构建（含 `webserver-gated` fork 行；任何早于平台改动的已发布镜像，包括过期的 `latest`） | `0.0.0.0:3080`，pod IP 可直连 | **只有 NetworkPolicy** |
+| 由改动后的 profile 构建（官方 webserver 行，平台改动已进镜像） | `127.0.0.1:3080` | NetworkPolicy 只是纵深防御 |
+
+第一态下不要把 NetworkPolicy 当成等价屏障，它有三个真实限制：
+
+1. **依赖 CNI**：只有支持 NetworkPolicy 的 CNI 才强制执行；CNI 不支持或策略被禁用时它不存在；
+2. **peer 是 label selector，不是 "本 pod"**：NetworkPolicy API 没有 "same pod" peer
+   类型，匹配的是本 workload 自己的 `app.kubernetes.io/name` 标签，`replicaCount > 1`
+   时同样放行兄弟副本；今天 `replicaCount: 1` 才让它恰好等于本 pod；
+3. **loopback 流量不经策略**：sidecar → dsh 走 pod netns 内的 `127.0.0.1`，
+   NetworkPolicy 根本不参与评估，这条规则只覆盖 "连 pod IP" 的路径。
+
+4180 的入口规则则刻意不限来源（给 ingress controller / 内部网关 / port-forward 用）。
 
 > **身份头**：`--set-xauthrequest` 产生的 `X-Auth-Request-*` 是返回给**浏览器**的
 > 响应头（nginx auth_request 风格）；真正到达 DSH 进程的是请求头
@@ -106,6 +130,8 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
 
 - 控制面单副本（多副本 = Plan 后续：共享状态后端 + 会话粘滞）
 - 平台插件（fs-k8s/subprocess-k8s/workspace-k8s/auth-oidc/user-domain）的 cordis 装配待控制面镜像集成
-- TLS 终止在 Ingress / Istio gateway（sidecar 与 dsh 之间是 pod 内明文 loopback；
-  sidecar 以 `--reverse-proxy=true` 信任网关的 `X-Forwarded-Proto`/`Host`，
-  生产环境建议把 `oauth2Proxy.trustedProxyIps` 设为网关 Pod 的 CIDR）
+- TLS 终止在 Ingress / Istio gateway（sidecar 与 dsh 之间是 pod 内明文 loopback ——
+  仅在"loopback 绑定"表里的第二态成立；sidecar 以 `--reverse-proxy=true` 信任网关的
+  `X-Forwarded-Proto`/`Host`，生产环境**必须**把 `oauth2Proxy.trustedProxyIps` 设为
+  网关/ingress Pod 的 CIDR：留空等于信任所有来源的 `X-Forwarded-*`，在
+  `auth.redirectUri` 与 `oauth2Proxy.redirectUrl` 都为空时可用于开放重定向/钓鱼）

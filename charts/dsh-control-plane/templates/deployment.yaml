@@ -26,13 +26,18 @@ spec:
         #    cordis.yml): override to the emptyDir volume and copy the
         #    baked-in home on start.
         #
-        #    --host 127.0.0.1 is half of the authentication design, not a
-        #    preference: DSH trusts the identity headers it receives, so it
-        #    must be unreachable except through the sidecar in this pod. The
-        #    other half is the profile's webserver row (owned by the
-        #    dsh-platform repo) -- it must bind 127.0.0.1 as well; `dsh web`
-        #    already rejects `--host 0.0.0.0` at the CLI, and no Service or
-        #    NetworkPolicy entry exposes this port. ─────────────────────────
+        #    --host 127.0.0.1 is this chart's half of the authentication
+        #    design, not a preference: DSH trusts the identity headers it
+        #    receives, so it must be unreachable except through the sidecar in
+        #    this pod. The other half is the platform profile (dsh-platform
+        #    repo, docker/profiles/web.cordis.patch.yml): the `webserver-gated`
+        #    fork row it hardcodes `host: '0.0.0.0'` and is being removed there
+        #    in the same change set. Until the deployed image is built from the
+        #    post-change profile the process ALSO listens on the pod IP -- no
+        #    Service targets that port, but the NetworkPolicy rule for it only
+        #    restricts the peer to pods carrying this workload's own labels, and
+        #    that rule is the ONLY barrier on the pod-IP path until then.
+        #    See values.yaml (ordering note) and docs/deployment.md. ─────────
         - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}

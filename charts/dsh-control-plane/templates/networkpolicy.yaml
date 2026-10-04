@@ -16,13 +16,21 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.oauth2Proxy.port }}
-    # dsh web ({{ .Values.dshWeb.port }}) is reachable ONLY from this pod. Normal sidecar
-    # traffic goes over 127.0.0.1 inside the pod netns, which NetworkPolicy
-    # never sees; this rule covers the remaining path -- a connection to the
-    # pod IP -- and allows it only from pods carrying this workload's own
-    # labels, i.e. this pod's own sidecar (replicaCount is 1). Any other
-    # source, including other namespaces, is denied. The process itself also
-    # binds loopback, so this is defence in depth, not the only barrier.
+    # dsh web ({{ .Values.dshWeb.port }}) is meant to be reachable only from this pod. Normal
+    # sidecar traffic goes over 127.0.0.1 inside the pod netns, which
+    # NetworkPolicy never evaluates; this rule covers the remaining path -- a
+    # connection to the pod IP -- and allows it only from pods carrying this
+    # workload's own labels. What this rule is and is not:
+    #   * until the deployed control-plane image is built from the platform
+    #     profile that drops the `webserver-gated` fork row (which hardcodes
+    #     `host: '0.0.0.0'`), dsh web listens on the pod IP too and THIS RULE IS
+    #     THE ONLY BARRIER on that path. Once such an image is in use the process
+    #     binds loopback and this rule is defence in depth (see values.yaml);
+    #   * it is enforced only by a policy-capable CNI: with a CNI that ignores
+    #     NetworkPolicy, nothing here applies;
+    #   * the peer is a label selector, not "this pod" -- the NetworkPolicy API
+    #     has no "same pod" peer type, so with replicaCount > 1 it also admits
+    #     sibling replicas. replicaCount 1 is what makes it exact today.
     - from:
         - podSelector:
             matchLabels:

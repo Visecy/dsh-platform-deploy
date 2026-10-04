@@ -5,11 +5,25 @@ image:
   dshWeb: ghcr.io/visecy/dsh-web-platform:latest
   pullPolicy: IfNotPresent
 
-# dsh web binds LOOPBACK ONLY (templates/deployment.yaml passes --host
-# 127.0.0.1) and no Service targets it: the oauth2-proxy sidecar below is the
-# pod's single entry point. That is what makes the identity headers
-# structural rather than policy-based -- the DSH process is not reachable from
-# anywhere except its own pod.
+# dsh web listen. This chart starts the process with `--host 127.0.0.1`, points
+# no Service at it, and gives its port a same-label-pod rule in the
+# NetworkPolicy, so the DSH process is meant to be reachable only through the
+# oauth2-proxy sidecar in the same pod -- that is what makes the identity
+# headers structural rather than policy-based.
+#
+# ORDERING -- the loopback bind is not true for every image. The bind comes
+# from the platform-side profile, not from this chart's flag alone: the
+# dsh-platform repo is removing the `webserver-gated` fork row that hardcodes
+# `host: '0.0.0.0'` (docker/profiles/web.cordis.patch.yml) and restoring the
+# official webserver row, in the same change set as this chart. On a
+# control-plane image built from a profile that still inserts that row -- any
+# image published before the platform change, including a stale `latest` --
+# dsh web ALSO listens on the pod IP, and the NetworkPolicy in
+# templates/networkpolicy.yaml is the ONLY barrier on that path. That barrier is
+# weaker than the loopback bind: it is enforced only by a policy-capable CNI,
+# and it admits any pod carrying this workload's own name label, because the
+# NetworkPolicy API has no "same pod" peer type. Judge by the image you deploy,
+# not by this comment; docs/deployment.md has the two states side by side.
 dshWeb:
   port: 3080
   # public authority(ies) forwarded to dsh web as --trusted-host. DSH 0.1.2
@@ -30,10 +44,11 @@ auth:
   sessionSecretRef: ""
 
 # oauth2-proxy sidecar: terminates the user session in an encrypted cookie
-# (stateless -- no Redis, no DB, no volume) and reverse-proxies to the
-# loopback-bound dsh web container, adding the verified identity as request
-# headers (X-Forwarded-User / -Groups; see the README note in
-# docs/deployment.md and templates/deployment.yaml).
+# (stateless -- no Redis, no DB, no volume) and reverse-proxies to the dsh web
+# container, adding the verified identity as request headers
+# (X-Forwarded-User / -Groups; see docs/deployment.md and
+# templates/deployment.yaml). It is the pod's only published entry point; read
+# the ordering note above before relying on dsh web being loopback-only.
 oauth2Proxy:
   image: quay.io/oauth2-proxy/oauth2-proxy
   # pinned; the sidecar's own image runs as uid 65532 (distroless, non-root)
@@ -56,9 +71,11 @@ oauth2Proxy:
   # python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
   cookieSecretRef: ""
   cookieSecretKey: session-secret
-  # Source CIDRs allowed to set X-Forwarded-* (empty = oauth2-proxy's
-  # back-compat "trust every peer", which logs a startup warning; set the
-  # ingress/gateway pod CIDR in production).
+  # Source CIDRs allowed to set X-Forwarded-* for this proxy. MUST be set in
+  # production to the ingress/gateway pod CIDR: empty means oauth2-proxy's
+  # back-compat "trust every peer" mode (it logs a startup warning), which lets
+  # any client pick X-Forwarded-Host/Proto -- open-redirect material whenever
+  # the redirect URL would otherwise be derived from the request.
   trustedProxyIps: []
   # Extra `--flag=value` args appended verbatim (escape hatch).
   extraArgs: []

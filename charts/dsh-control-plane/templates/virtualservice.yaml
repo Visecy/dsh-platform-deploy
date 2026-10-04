@@ -16,8 +16,10 @@ spec:
             host: {{ include "dsh-control-plane.fullname" . }}
             port:
               # the Service front port = oauth2-proxy sidecar; dsh web itself
-              # ({{ .Values.dshWeb.port }}) is loopback-only. Istio/Envoy streams responses
-              # by default and its route timeout is disabled unless set, so
-              # the WebSocket and SSE endpoints need no extra tuning here.
+              # ({{ .Values.dshWeb.port }}) is not published by the Service and is started with
+              # --host 127.0.0.1 (values.yaml records the ordering caveat).
+              # Istio/Envoy streams responses by default and its route timeout is
+              # disabled unless set, so the WebSocket and SSE endpoints need no
+              # extra tuning here.
               number: {{ .Values.oauth2Proxy.port }}
 {{- end }}
