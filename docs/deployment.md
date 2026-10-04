@@ -75,12 +75,13 @@ dsh-client-connection 的 Host/Origin fence 保护；sidecar 以 `--pass-host-he
 
 ## 前置
 
-1. authentik OIDC 应用（见 config/authentik.example.md）：平台 client + kube-apiserver client
+1. authentik OIDC 应用（见 config/authentik.example.md）：平台应用在 IdP 侧注册的回调
+   地址是 `https://<host>/oauth2/callback`（oauth2-proxy 的路径），另需 kube-apiserver client
 2. 镜像：`ghcr.io/visecy/dsh-web-platform:<tag>`（自包含控制面：官方 @deepseek-ai/dsh
    0.1.2-rc.1 + @visecy 平台插件，tag 与插件 npm 版本一致）、
    `ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:<tag>`
-   （不需要 auth-gate 镜像：进程内 gate 及其 kaniko 构建清单已删除，认证由本 chart
-   部署的 oauth2-proxy sidecar 承担）
+   （认证由本 chart 部署的 oauth2-proxy sidecar 承担：控制面镜像里没有任何进程内认证
+   组件，也没有额外的认证镜像要构建）
 3. helm 3 + kubeconfig
 
 ## 安装
@@ -156,7 +157,9 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
 ## 已知限制（v1）
 
 - 控制面单副本（多副本 = Plan 后续：共享状态后端 + 会话粘滞）
-- 平台插件（fs-k8s/subprocess-k8s/workspace-k8s/auth-oidc/user-domain）的 cordis 装配待控制面镜像集成
+- 平台插件集随控制面镜像内置（fs-k8s / subprocess-k8s / workspace-k8s /
+  workspace-picker / identity-bridge / storage-db / session-persistence-rdb /
+  platform-domain），版本与镜像 tag 绑定：无法单独升级某个插件而不重建镜像
 - TLS 终止在 Ingress / Istio gateway（sidecar 与 dsh 之间是 pod 内明文 loopback ——
   仅在"loopback 绑定"表里的第二态成立；sidecar 以 `--reverse-proxy=true` 信任网关的
   `X-Forwarded-Proto`/`Host`，生产环境**必须**把 `oauth2Proxy.trustedProxyIps` 设为
