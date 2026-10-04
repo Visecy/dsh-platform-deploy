@@ -96,7 +96,10 @@ ingress:
   className: ""
   host: ""
   tlsSecret: ""
-  # Extra annotations for this Ingress. nginx-ingress buffers proxied
+  # Extra annotations for this Ingress. Values are strings: pass numbers with
+  # --set-string (the template quotes every value, so a stray `--set ...=3600`
+  # no longer produces an object the API server rejects).
+  # nginx-ingress buffers proxied
   # responses and times out idle streams, which silently breaks the SSE
   # stream (/plugins/events) and the WebSocket (/api/remote.mux):
   #   nginx.ingress.kubernetes.io/proxy-buffering: "off"

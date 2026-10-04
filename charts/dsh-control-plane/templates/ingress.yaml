@@ -6,8 +6,14 @@ metadata:
   labels:
     {{- include "dsh-control-plane.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
+  # annotations are map[string]string: quote every value so that a numeric
+  # --set (e.g. proxy-read-timeout=3600, which helm parses as int64) cannot
+  # render an unquoted number, which the API server rejects. --set-string in
+  # docs/deployment.md is still the documented way to pass them.
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- range $key, $value := . }}
+    {{ $key | quote }}: {{ $value | quote }}
+    {{- end }}
   {{- end }}
 spec:
   {{- with .Values.ingress.className }}

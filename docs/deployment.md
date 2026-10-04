@@ -90,9 +90,13 @@ helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platfor
   --set ingress.host=dsh.<domain> \
   --set ingress.className=nginx \
   --set ingress.tlsSecret=dsh-tls \
-  --set ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-buffering"=off \
-  --set ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-read-timeout"=3600 \
-  --set ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-send-timeout"=3600
+  # 注解值必须是字符串：用 --set-string（--set ...=3600 会被 helm 解析成
+  # int64，metadata.annotations 是 map[string]string，API server 直接拒绝：
+  # json: cannot unmarshal number into Go struct field
+  # ObjectMeta.metadata.annotations of type string）
+  --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-buffering"=off \
+  --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-read-timeout"=3600 \
+  --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-send-timeout"=3600
 ```
 
 ### 迁移到 sidecar 必须做的三件事
