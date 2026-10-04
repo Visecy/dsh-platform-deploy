@@ -101,7 +101,7 @@ kubectl -n dsh-platform create secret generic dsh-oauth2-proxy \
 helm upgrade --install dsh-control-plane charts/dsh-control-plane -n dsh-platform \
   --set auth.oidcIssuer=https://authentik.<cluster>/application/o/dsh-platform/ \
   --set auth.oidcClientId=<client-id> \
-  --set auth.redirectUri=https://dsh.<domain>/auth/callback \
+  --set auth.redirectUri=https://dsh.<domain>/oauth2/callback \
   --set oauth2Proxy.redirectUrl=https://dsh.<domain>/oauth2/callback \
   --set oauth2Proxy.publicOrigin=https://dsh.<domain> \
   --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
@@ -144,10 +144,10 @@ identity-bridge 用官方 launch-token handoff 提供首页：需要重定向时
 
 ### 迁移到 sidecar 必须做的三件事
 
-1. **IdP 新增回调地址** `https://dsh.<domain>/oauth2/callback`（oauth2-proxy 的
-   路径；旧的 `/auth/callback` 属于已删除的进程内 gate）。只改 origin 不改路径
-   也可以：`oauth2Proxy.redirectUrl` 留空时由 `auth.redirectUri` 的 origin +
-   `/oauth2/callback` 推导。
+1. **IdP 注册回调地址** `https://dsh.<domain>/oauth2/callback`（oauth2-proxy 的固定
+   路径，应用自身不注册任何回调路由）。`auth.redirectUri` 只有 origin 参与推导：
+   `oauth2Proxy.redirectUrl` 留空时得到 `<origin>/oauth2/callback`，因此路径写错不会
+   改变渲染结果，但请照实写，便于审计。
 2. **cookie secret** 长度必须是 16/24/32 字节，否则 sidecar 启动即失败
    （`cookie_secret must be 16, 24, or 32 bytes to create an AES cipher`）。
    `oauth2Proxy.cookieSecretRef` 留空会回落到 `auth.sessionSecretRef` 的

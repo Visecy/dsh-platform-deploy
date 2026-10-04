@@ -54,10 +54,17 @@ echo "==> helm install dsh-control-plane (dummy issuer for smoke)"
 # /ping, which is what the readiness probe and `helm --wait` need.
 # --cookie-secure=false keeps the smoke session cookie usable over the plain
 # HTTP of a port-forwarded kind install.
+#
+# auth.redirectUri's ORIGIN is load-bearing twice: it derives the sidecar's
+# --redirect-url (<origin>/oauth2/callback, since oauth2Proxy.redirectUrl is
+# not set here) and, with oauth2Proxy.publicOrigin unset, the app container's
+# DSH_PUBLIC_ORIGIN = http://localhost:3080. The path is documentation only --
+# the IdP registers /oauth2/callback -- and the sign-in flow itself is not
+# exercised by this smoke (dummy issuer, discovery skipped).
 helm upgrade --install dsh-control-plane ./charts/dsh-control-plane -n "$NS" \
   --set auth.oidcIssuer="http://127.0.0.1:0" \
   --set auth.oidcClientId="smoke" \
-  --set auth.redirectUri="http://localhost:3080/auth/callback" \
+  --set auth.redirectUri="http://localhost:3080/oauth2/callback" \
   --set auth.oidcClientSecretRef=dsh-oidc \
   --set auth.sessionSecretRef=dsh-oidc \
   --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
