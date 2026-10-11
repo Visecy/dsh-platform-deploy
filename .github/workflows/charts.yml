@@ -1,0 +1,57 @@
+# Chart gate: this repo had no CI at all, so a values/template change was only
+# ever tested by whoever ran `helm install` first.
+name: charts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: charts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint both charts
+        run: helm lint charts/dsh-control-plane charts/dsh-workspace
+
+      # The exact command shape docs/deployment.md gives an operator, with
+      # placeholder values. If this stops rendering, the quickstart is broken.
+      - name: Render the control plane with the documented values
+        run: |
+          helm template dsh-control-plane charts/dsh-control-plane -n dsh-platform \
+            --set auth.oidcIssuer=https://authentik.example.com/application/o/dsh-platform/ \
+            --set auth.oidcClientId=test-client \
+            --set auth.redirectUri=https://dsh.example.com/oauth2/callback \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com \
+            --set oauth2Proxy.trustedProxyIps[0]=10.0.0.0/8 \
+            --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
+            --set oauth2Proxy.cookieSecretKey=cookie-secret \
+            --set auth.oidcClientSecretRef=dsh-oidc \
+            --set dshWeb.trustedHosts[0]=dsh.example.com \
+            --set ingress.enabled=true \
+            --set ingress.host=dsh.example.com \
+            --set ingress.className=nginx \
+            --set ingress.tlsSecret=dsh-tls > /dev/null
+
+      # Fail-closed is a feature, not an accident: no OIDC settings must not
+      # render a control plane that cannot authenticate anyone.
+      - name: Missing required values must fail the render
+        run: |
+          if helm template dsh-control-plane charts/dsh-control-plane -n dsh-platform > /dev/null 2>&1; then
+            echo "FATAL: the chart rendered without auth.oidcIssuer / cookie secret refs"; exit 1
+          fi
+
+      # charts/dsh-workspace is a values-only reference: it must keep rendering
+      # (empty) rather than grow a second, competing owner of workspace pods.
+      - name: The workspace reference chart renders nothing
+        run: helm template dsh-workspace charts/dsh-workspace > /dev/null
