@@ -5,7 +5,7 @@ image:
   # Pin the platform tag: `latest` is a moving target whose profile may not match
   # this chart's expectations, and the workspace daemon image must come from the
   # SAME tag (see workspace.image). Bump both together on every release.
-  dshWeb: ghcr.io/visecy/dsh-web-platform:v0.1.87
+  dshWeb: ghcr.io/visecy/dsh-web-platform:v0.1.88
   pullPolicy: IfNotPresent
 
 # dsh web listen. This chart starts the process with `--host 127.0.0.1`, points
@@ -130,7 +130,7 @@ workspace:
   # MUST be the daemon image built from the SAME platform tag as the control
   # plane: the two sides share the daemon wire protocol and there is no version
   # handshake. Bump this together with image.dshWeb on every release.
-  image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.87
+  image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.88
   daemonPort: 4390
   # StorageClass for the per-workspace PVC. Empty string = the cluster's default
   # class. The platform's image default is `local-path`, which only exists on

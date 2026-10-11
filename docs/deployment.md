@@ -3,7 +3,7 @@
 面向运维：从零装到能用、怎么验证、怎么升级/回滚/备份，以及**必须自己补的那部分**。
 
 - 平台版本与 DSH 版本的对应关系见 dsh-platform 的 `README.md`（兼容性矩阵）。
-  本文按平台 `v0.1.87` + DSH `0.2.0-rc.2` 编写；镜像与插件版本由平台 tag 决定。
+  本文按平台 `v0.1.88` + DSH `0.2.0-rc.2` 编写；镜像与插件版本由平台 tag 决定。
 - 平台内部结构（组件、数据流、扩展点）见 dsh-platform 的 `docs/architecture.md`。
 
 ## 1. 架构
@@ -111,7 +111,7 @@ kubectl -n dsh-platform create secret generic dsh-oauth2-proxy \
 
 ```bash
 # 用与 chart 版本一致的 tag（两处必须是同一 tag：控制面与工作区 daemon 共享协议）
-TAG=v0.1.87
+TAG=v0.1.88
 
 helm upgrade --install dsh-control-plane ./charts/dsh-control-plane -n dsh-platform \
   --set image.dshWeb=ghcr.io/visecy/dsh-web-platform:${TAG} \

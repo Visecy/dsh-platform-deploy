@@ -4,13 +4,16 @@
 没有独立版本号**：镜像 tag 与插件版本都由平台仓的 `v*` tag 决定，因此下面按平台版本记录
 部署侧的变化；平台本体（插件、镜像、DSH 基线）见平台仓的 `CHANGELOG.md`。
 
-## 未发布（预览）
+## v0.1.88（预览）
 
-当前 `main` 相对上一个已发布平台 tag（`v0.1.87`）的内容。**预览版，不面向生产**，部署限制见
+`v0.1.88` 相对上一个已发布平台 tag（`v0.1.87`）的部署侧变化。**预览版，不面向生产**，部署限制见
 `docs/deployment.md` §8。本轮目标是让第一次预览发布前，chart、文档与平台实际行为不再互相矛盾。
 
 ### 发布就绪修正
 
+- **默认镜像 tag 对齐到平台 `v0.1.88`**：`image.dshWeb`、`workspace.image`、
+  `charts/dsh-workspace/values.yaml` 的参考值、`kind/workspace-smoke.yaml` 与
+  `docs/deployment.md` 的示例全部指向同一 tag（控制面与 daemon 共享协议，必须同 tag）。
 - **部署文档重写为从零快速开始**：`docs/deployment.md` 现在按顺序覆盖前置条件、
   命名空间、数据库连接串 Secret、IdP 回调与两个 Secret、安装命令（含必须同步的两个镜像 tag）、
   验证、认证契约（身份头 / `trustedProxyIps` / `DSH_PUBLIC_ORIGIN` 的推导顺序）、
