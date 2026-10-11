@@ -15,10 +15,18 @@ spec:
         app.kubernetes.io/name: {{ include "dsh-control-plane.name" . }}
     spec:
       serviceAccountName: {{ include "dsh-control-plane.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      # Empty by default: the published images are public. Set it when mirroring
+      # them into a private registry (values.yaml has the shape).
       imagePullSecrets:
-        - name: ghcr-pull
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         fsGroup: 1000
+        # Required by the `restricted` PodSecurity standard. RuntimeDefault is
+        # the runtime's own profile, so this only changes the admission decision.
+        seccompProfile:
+          type: RuntimeDefault
       # ── DSH_PUBLIC_ORIGIN: pin the handoff origin ───────────────────────
       # identity-bridge (platform profile row: `publicOrigin: !!js
       # process.env.DSH_PUBLIC_ORIGIN`) serves the index through the official
@@ -67,15 +75,10 @@ spec:
         #    --host 127.0.0.1 is this chart's half of the authentication
         #    design, not a preference: DSH trusts the identity headers it
         #    receives, so it must be unreachable except through the sidecar in
-        #    this pod. The other half is the platform profile (dsh-platform
-        #    repo, docker/profiles/web.cordis.patch.yml): the `webserver-gated`
-        #    fork row it hardcodes `host: '0.0.0.0'` and is being removed there
-        #    in the same change set. Until the deployed image is built from the
-        #    post-change profile the process ALSO listens on the pod IP -- no
-        #    Service targets that port, but the NetworkPolicy rule for it only
-        #    restricts the peer to pods carrying this workload's own labels, and
-        #    that rule is the ONLY barrier on the pod-IP path until then.
-        #    See values.yaml (ordering note) and docs/deployment.md. ─────────
+        #    this pod. The other half is the platform profile
+        #    (dsh-platform repo, docker/profiles/web.cordis.patch.yml): the
+        #    official webserver row binds loopback, and no Service targets this
+        #    port. values.yaml pins the image tag for exactly this reason. ────
         - name: dsh-web
           image: "{{ .Values.image.dshWeb }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -109,7 +112,40 @@ spec:
             - name: WS_NAMESPACE
               value: {{ .Release.Namespace | quote }}
             - name: WS_IMAGE
-              value: {{ .Values.workspace.image | quote }}
+              value: {{ required "workspace.image required: it must be the daemon image built from the same platform tag as image.dshWeb" .Values.workspace.image | quote }}
+            # ── workspace runtime knobs ────────────────────────────────────
+            # Every one of these is read by the platform image's profile
+            # (docker/profiles/*.cordis.patch.yml in dsh-platform). They are
+            # rendered as plain env so a deployment can change them without
+            # rebuilding the image; the profile's own defaults are the fallback
+            # for hand-rolled manifests.
+            - name: WS_STORAGE_CLASS
+              value: {{ .Values.workspace.storageClassName | quote }}
+            - name: WS_STORAGE_SIZE
+              value: {{ .Values.workspace.storageSize | quote }}
+            - name: WS_RUNTIME_CLASS
+              value: {{ .Values.workspace.runtimeClassName | quote }}
+            - name: WS_IDLE_TIMEOUT_MS
+              value: {{ .Values.workspace.idleTimeoutMs | quote }}
+            - name: WS_GRACE_MS
+              value: {{ .Values.workspace.graceMs | quote }}
+            - name: WS_RECONCILE_INTERVAL_MS
+              value: {{ .Values.workspace.reconcileIntervalMs | quote }}
+            - name: WS_METRIC_INTERVAL_MS
+              value: {{ .Values.workspace.metricIntervalMs | quote }}
+            - name: WS_CPU_LIMIT
+              value: {{ .Values.workspace.cpu | quote }}
+            - name: WS_MEM_LIMIT
+              value: {{ .Values.workspace.memory | quote }}
+            {{- if .Values.workspace.networkPolicy.enabled }}
+            # Fences the unauthenticated daemon (4390) to the control plane.
+            # Requires a CNI that enforces NetworkPolicy; the peer labels must
+            # match the pods that call the daemon (see values.yaml).
+            - name: WS_NETWORK_POLICY
+              value: "1"
+            - name: WS_CONTROL_PLANE_POD_LABELS
+              value: {{ .Values.workspace.networkPolicy.controlPlanePodLabels | toJson | quote }}
+            {{- end }}
             - name: DSH_PG_CONNECTION_STRING
               valueFrom:
                 secretKeyRef:

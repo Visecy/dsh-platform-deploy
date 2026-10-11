@@ -16,6 +16,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/status", "services", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # per-workspace NetworkPolicy, created only when workspace.networkPolicy.enabled
+  # (the daemon has no authentication of its own, so this is how a deployment
+  # fences it to the control plane)
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   # metrics.k8s.io pod usage for the workspace status page (metrics-server)
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]

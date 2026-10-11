@@ -2,28 +2,23 @@
 replicaCount: 1
 
 image:
-  dshWeb: ghcr.io/visecy/dsh-web-platform:latest
+  # Pin the platform tag: `latest` is a moving target whose profile may not match
+  # this chart's expectations, and the workspace daemon image must come from the
+  # SAME tag (see workspace.image). Bump both together on every release.
+  dshWeb: ghcr.io/visecy/dsh-web-platform:v0.1.87
   pullPolicy: IfNotPresent
 
 # dsh web listen. This chart starts the process with `--host 127.0.0.1`, points
 # no Service at it, and gives its port a same-label-pod rule in the
-# NetworkPolicy, so the DSH process is meant to be reachable only through the
-# oauth2-proxy sidecar in the same pod -- that is what makes the identity
-# headers structural rather than policy-based.
+# NetworkPolicy, so the DSH process is reachable only through the oauth2-proxy
+# sidecar in the same pod -- that is what makes the identity headers structural
+# rather than policy-based.
 #
-# ORDERING -- the loopback bind is not true for every image. The bind comes
-# from the platform-side profile, not from this chart's flag alone: the
-# dsh-platform repo is removing the `webserver-gated` fork row that hardcodes
-# `host: '0.0.0.0'` (docker/profiles/web.cordis.patch.yml) and restoring the
-# official webserver row, in the same change set as this chart. On a
-# control-plane image built from a profile that still inserts that row -- any
-# image published before the platform change, including a stale `latest` --
-# dsh web ALSO listens on the pod IP, and the NetworkPolicy in
-# templates/networkpolicy.yaml is the ONLY barrier on that path. That barrier is
-# weaker than the loopback bind: it is enforced only by a policy-capable CNI,
-# and it admits any pod carrying this workload's own name label, because the
-# NetworkPolicy API has no "same pod" peer type. Judge by the image you deploy,
-# not by this comment; docs/deployment.md has the two states side by side.
+# The loopback bind comes from the platform image's profile, not from this
+# chart's flag alone. Every published image since the zero-patch rewrite binds
+# 127.0.0.1 and does the OIDC gate in the sidecar; a pre-rewrite image (the old
+# `webserver-gated` fork row) would also listen on the pod IP, where the
+# NetworkPolicy is the only barrier. Do not run such an image: pin the tag above.
 dshWeb:
   port: 3080
   # public authority(ies) forwarded to dsh web as --trusted-host. DSH 0.1.2
@@ -132,14 +127,60 @@ oauth2Proxy:
 
 # workspace execution pods (sandbox daemon)
 workspace:
-  image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.49
+  # MUST be the daemon image built from the SAME platform tag as the control
+  # plane: the two sides share the daemon wire protocol and there is no version
+  # handshake. Bump this together with image.dshWeb on every release.
+  image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.87
   daemonPort: 4390
+  # StorageClass for the per-workspace PVC. Empty string = the cluster's default
+  # class. The platform's image default is `local-path`, which only exists on
+  # clusters that ship the local-path provisioner -- set this explicitly on any
+  # other cluster, or every PVC stays Pending and workspaces never start.
   storageClassName: "local-path"
   storageSize: "2Gi"
+  # Isolation escalation: "" (runc) -> gvisor -> kata. Requires the RuntimeClass
+  # to exist on the cluster.
+  runtimeClassName: ""
+  # Idle sleep / lingering-command grace / reconcile + metrics intervals.
+  # QUOTED ON PURPOSE: Helm renders a bare YAML number with Go's %v, which
+  # switches to scientific notation at 1e6 -- `graceMs: 10800000` reached the
+  # container as "1.08e+07" on a live install. JavaScript's Number() happens to
+  # parse that, but the env var must read as the digit string it is.
+  idleTimeoutMs: "300000"
+  graceMs: "10800000"
+  reconcileIntervalMs: "60000"
+  metricIntervalMs: "15000"
+  # Workspace pod requests = limits.
+  cpu: "2"
+  memory: "2Gi"
+  # Fence the unauthenticated sandbox daemon (port 4390, files/commands/pty) to
+  # the control plane with a per-workspace NetworkPolicy.
+  #
+  # OFF BY DEFAULT on purpose: it only takes effect on a CNI that enforces
+  # NetworkPolicy, and the peer is a pod selector -- get it wrong and every
+  # workspace becomes unreachable. Turn it on in any cluster where other tenants
+  # can schedule pods: without it, ANY pod that can reach the workspace pod can
+  # read and write its files and run commands in it.
+  networkPolicy:
+    enabled: false
+    # Pod labels of the control plane; must match the pods that call the daemon
+    # (this chart renders app.kubernetes.io/name=dsh-control-plane).
+    controlPlanePodLabels:
+      app.kubernetes.io/name: dsh-control-plane
 
-# shared CNPG PostgreSQL connection secret injected into the control plane.
+# Secret holding the PostgreSQL connection string (key:
+# DSH_PG_CONNECTION_STRING). REQUIRED: the shipped profile reads it through
+# `secretKeyRef` with no default, and PostgreSQL is the only backend the image
+# offers. Create it before the first install -- see docs/deployment.md.
 db:
   connectionStringSecret: dsh-db
+
+# imagePullSecrets for BOTH containers. Empty by default: the published images
+# are public, so a fresh cluster needs nothing here. Set it when you mirror the
+# images into a private registry, e.g.
+#   imagePullSecrets:
+#     - name: my-registry-pull
+imagePullSecrets: []
 
 ingress:
   enabled: false
