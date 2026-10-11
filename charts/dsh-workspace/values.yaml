@@ -1,42 +1,74 @@
-# dsh-workspace: runtime configuration for workspace execution pods.
+# dsh-workspace: runtime configuration REFERENCE for workspace execution pods.
 #
-# NOTE: workspace pods are created dynamically by the control plane's
-# lifecycle manager (dsh-workspace-k8s ensure/attach). This chart is the
-# configuration REFERENCE that maps to the manager's options, plus the
-# per-workspace PVC and NetworkPolicy defaults. It is not meant to be
-# installed directly.
+# Workspace pods are created dynamically by the control plane's lifecycle
+# manager (`@visecy/dsh-workspace-k8s` ensure/dispose), NOT by installing this
+# chart -- the chart has no templates on purpose, because one Helm release
+# cannot own N pods that come and go with user activity. Install
+# `charts/dsh-control-plane` instead; these values exist to document what the
+# manager does with each knob and where in the control-plane release it is set.
+#
+# control-plane values.yaml -> container env -> dsh-workspace-k8s config
+#   workspace.image            WS_IMAGE            image
+#   workspace.daemonPort       (fixed 4390)        daemonPort
+#   workspace.storageClassName WS_STORAGE_CLASS    storageClassName
+#   workspace.storageSize      WS_STORAGE_SIZE     storageSize
+#   workspace.runtimeClassName WS_RUNTIME_CLASS    runtimeClassName
+#   workspace.cpu / memory     WS_CPU_LIMIT/MEM_LIMIT  resources (requests = limits)
+#   workspace.networkPolicy.*  WS_NETWORK_POLICY / WS_CONTROL_PLANE_POD_LABELS
+#
+# The label the platform puts on every workspace pod and the headless service
+# is `app=dsh-workspace` plus `workspace=<id>`; the PVC is `<id>-data` and the
+# optional NetworkPolicy is `<id>-netpol`.
 
-image: visecy/dsh-sandbox-daemon:0.1.0
+# MUST be built from the same platform tag as the control-plane image.
+image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.87
 daemonPort: 4390
 
-# workspace volume (created per workspace by the manager)
+# Per-workspace PVC (created by the manager).
 storage:
-  storageClassName: ""
-  size: 10Gi
+  # "" = cluster default class. The platform's image default is `local-path`,
+  # which exists only where the local-path provisioner is installed.
+  storageClassName: "local-path"
+  size: 2Gi
+  # The platform always requests ReadWriteOnce; ReadWriteMany-only storage is
+  # not supported.
+  accessMode: ReadWriteOnce
 
-# RuntimeClass for isolation escalation: "" (runc default) -> gvisor -> kata
+# Isolation escalation: "" (runc default) -> gvisor -> kata. The class must
+# exist on the cluster; the pod is created with `runtimeClassName` set to it.
 runtimeClassName: ""
 
+# What K8sPodController actually sets on the workspace pod (packages/workspace-k8s/src/k8s-client.ts).
 securityContext:
   runAsUser: 1000
   runAsNonRoot: true
+  fsGroup: 1000
   allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
   capabilitiesDrop: ["ALL"]
+  seccompProfile: RuntimeDefault
+  # NOT readOnlyRootFilesystem: the daemon keeps its own runtime state
+  # (command/pty frame files, pid + exit records) under /tmp inside the pod. A
+  # read-only root filesystem would break every command and PTY.
+  readOnlyRootFilesystem: false
 
+# requests == limits (guaranteed QoS for the workspace pod).
 resources:
-  requests:
-    cpu: 100m
-    memory: 256Mi
-  limits:
-    cpu: "2"
-    memory: 2Gi
+  cpu: "2"
+  memory: 2Gi
 
-# Which namespaces may reach workspace daemons (control plane).
-controlPlaneNamespaces:
-  - dsh-platform
+# Whether the manager creates the per-workspace NetworkPolicy that fences the
+# unauthenticated daemon (4390) to the control plane. Off by default: it only
+# works on a CNI that enforces NetworkPolicy, and the peer is a pod selector.
+# Without it, any pod that can reach the workspace pod can read/write its files
+# and run commands in it.
+networkPolicy:
+  enabled: false
+  controlPlanePodLabels:
+    app.kubernetes.io/name: dsh-control-plane
 
-# Optional egress allowlist for workspace pods (cluster API servers, registries...)
+# Not implemented by the platform today: there is no per-workspace egress
+# allowlist and no per-workspace ServiceAccount (the namespace's `default` SA is
+# used). Recorded here so the gap is explicit rather than assumed.
 egress:
   enabled: false
   cidrs: []
