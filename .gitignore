@@ -1,0 +1,14 @@
+# Dependencies and build output
+node_modules/
+*.tgz
+Chart.lock
+charts/*/charts/
+
+# Helm/k8s scratch
+.helm-*/
+values.local.yaml
+*.local.yaml
+
+# Editor / OS noise
+.DS_Store
+*.swp
