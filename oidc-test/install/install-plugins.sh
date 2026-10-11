@@ -10,18 +10,27 @@ export DSH_HOME=/home/node/.dsh
 P=/home/node/.dsh/profiles/web
 SRC=/plugins-src
 export PNPM_HOME=/home/node/.local/share/pnpm
-# 与 dsh-web-platform 镜像一致：插件版本跟随 PLUGIN_VERSION（未设置时 latest）
-PLUGIN_VERSION="${PLUGIN_VERSION:-latest}"
 
 echo "== 1. init clean web profile =="
 rm -rf $P
 dsh --profile web --dump-config > /dev/null 2>&1 || true
 
-echo "== 2. pnpm add @visecy/dsh-identity-bridge@${PLUGIN_VERSION} =="
-# 只有 identity-bridge：它把 sidecar 注入的 X-Forwarded-User/-Groups 接到
-# ctx.dshAuth 并接管官方 `/` handoff。@kubernetes/client-node 是 k8s 系列插件
-# 的运行期依赖，本 rig 的 patch 不装配它们，因此不再安装。
-corepack pnpm --dir $P add -w "@visecy/dsh-identity-bridge@${PLUGIN_VERSION}" 2>&1 | tail -1
+echo "== 2. install @visecy/dsh-identity-bridge FROM THE CHECKOUT =="
+# Only identity-bridge: it wires the sidecar's X-Forwarded-User/-Groups into
+# ctx.dshAuth and owns the official `/` handoff. @kubernetes/client-node is the
+# runtime dependency of the k8s plugins, which this rig's patch does not mount.
+#
+# Why not from npm: @visecy/dsh-identity-bridge is NOT published yet (the first
+# publish of a new package cannot use npm Trusted Publishing, so it needs a
+# one-time manual bootstrap -- see dsh-platform/.github/workflows/release.yml).
+# `pnpm add @visecy/dsh-identity-bridge@latest` therefore fails with 404. Manifests
+# for this rig must mount a dsh-platform checkout at $SRC (e.g. a git clone of
+# https://github.com/Visecy/dsh-platform at the tag under test).
+if [ ! -d "$SRC/dsh-platform/packages/identity-bridge" ]; then
+  echo "FATAL: no dsh-platform checkout at $SRC/dsh-platform (mount one; see oidc-test/README.md)" >&2
+  exit 1
+fi
+corepack pnpm --dir $P add -w "file:$SRC/dsh-platform/packages/identity-bridge" 2>&1 | tail -1
 
 echo "== 3. profile patch =="
 cp $SRC/cordis.patch.yml $P/cordis.patch.yml

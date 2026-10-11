@@ -13,7 +13,7 @@ spec:
       args:
         - "--context=tar:///context/context.tar.gz"
         - "--dockerfile=docker/dsh-sandbox-daemon.Dockerfile"
-        - "--destination=ghcr.io/visecy/dsh-sandbox-daemon:0.1.0"
+        - "--destination=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:dev"
         - "--registry-mirror=docker.1panel.live"
         - "--cache=false"
       env:

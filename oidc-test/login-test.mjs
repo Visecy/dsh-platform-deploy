@@ -8,7 +8,7 @@
 // over https it is `__Host-_oauth2_proxy`), and an unauthenticated API request
 // is 401 only when it looks like a JSON/AJAX call -- a plain fetch gets a 302
 // to the IdP instead.
-const BASE = process.env.DSH_URL ?? 'https://dsh.svc.visecy.top'
+const BASE = process.env.DSH_URL ?? 'https://dsh.svc.example.test'
 const USER = process.env.TEST_USER ?? 'admin@test.local'
 const PASS = process.env.TEST_PASS ?? 'test-password'
 

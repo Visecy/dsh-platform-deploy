@@ -5,7 +5,7 @@ metadata:
   namespace: dsh-oidc-test
 data:
   config.yaml: |
-    issuer: https://oidc-test.svc.visecy.top/dex
+    issuer: https://oidc-test.svc.example.test/dex
     storage:
       type: memory
     web:
@@ -23,7 +23,7 @@ data:
         redirectURIs:
           # oauth2-proxy sidecar's callback path. The old /auth/callback
           # belonged to the deleted in-process gate and is no longer served.
-          - 'https://dsh.svc.visecy.top/oauth2/callback'
+          - 'https://dsh.svc.example.test/oauth2/callback'
         secret: test-client-secret
     enablePasswordDB: true
     staticPasswords:
@@ -97,7 +97,7 @@ spec:
   gateways:
     - istio-system/internal-gateway
   hosts:
-    - oidc-test.svc.visecy.top
+    - oidc-test.svc.example.test
   http:
     - route:
         - destination:

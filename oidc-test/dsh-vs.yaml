@@ -7,7 +7,7 @@ spec:
   gateways:
     - istio-system/internal-gateway
   hosts:
-    - dsh.svc.visecy.top
+    - dsh.svc.example.test
   http:
     - route:
         - destination:
