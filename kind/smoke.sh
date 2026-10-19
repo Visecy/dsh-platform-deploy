@@ -105,9 +105,13 @@ echo "==> helm install dsh-control-plane (dummy issuer for smoke)"
 # auth.redirectUri's ORIGIN is load-bearing twice: it derives the sidecar's
 # --redirect-url (<origin>/oauth2/callback, since oauth2Proxy.redirectUrl is
 # not set here) and, with oauth2Proxy.publicOrigin unset, the app container's
-# DSH_PUBLIC_ORIGIN = http://localhost:3080. The path is documentation only --
-# the IdP registers /oauth2/callback -- and the sign-in flow itself is not
-# exercised by this smoke (dummy issuer, discovery skipped).
+# `dsh web --public-url` = http://localhost:3080. The path is documentation
+# only -- the IdP registers /oauth2/callback -- and the sign-in flow itself is
+# not exercised by this smoke (dummy issuer, discovery skipped).
+#
+# This chart passes `--public-url`, so the smoke needs an image on the platform
+# v0.1.90+ line (the 0.2.1 CLI); bump the chart's image pin and this script's
+# expectations together on the next release.
 helm upgrade --install dsh-control-plane ./charts/dsh-control-plane -n "$NS" \
   --set auth.oidcIssuer="http://127.0.0.1:0" \
   --set auth.oidcClientId="smoke" \

@@ -27,16 +27,23 @@ spec:
         # the runtime's own profile, so this only changes the admission decision.
         seccompProfile:
           type: RuntimeDefault
-      # ── DSH_PUBLIC_ORIGIN: pin the handoff origin ───────────────────────
-      # identity-bridge (platform profile row: `publicOrigin: !!js
-      # process.env.DSH_PUBLIC_ORIGIN`) serves the index through the official
-      # launch-token handoff and, on the redirect leg, sends the browser to
-      # `authenticatedUrl()`. With no origin configured that origin is derived
-      # from the REQUEST's X-Forwarded-Proto/Host -- headers a client can
-      # influence unless oauth2Proxy.trustedProxyIps pins the trusted proxy
-      # CIDR. The app's own authority fence (unknown authority -> 403 with no
-      # Location) is what keeps that from emitting a tokenized URL today; this
-      # value removes the reliance instead of stacking another guard.
+      # ── public root: passed to `dsh web` as --public-url ────────────────
+      # The public root is the deployment's single external-URL truth. It is
+      # passed to the DSH process as `--public-url`, and the app advertises it
+      # everywhere: the launch-token handoff redirect (identity-bridge reads the
+      # official advertised root through ctx.webApp.getAdvertisedUrl()),
+      # DSH_WEB_URL, and the runtime context. With no root configured the
+      # handoff would derive it from the REQUEST's X-Forwarded-Proto/Host --
+      # headers a client can influence unless oauth2Proxy.trustedProxyIps pins
+      # the trusted proxy CIDR. The app's own authority fence (an unknown
+      # authority never receives a tokenized Location) is the backstop, but
+      # passing the root removes the reliance instead of stacking another guard.
+      #
+      # Requires a platform image on the DSH 0.2.1 line (v0.1.90+): that CLI
+      # understands `--public-url`, and its identity-bridge derives the handoff
+      # root from the same advertised URL. No DSH_PUBLIC_ORIGIN env is needed;
+      # the profile keeps it only as an explicit override for hand-rolled
+      # manifests.
       #
       # Resolution order (first hit wins):
       #   1. oauth2Proxy.publicOrigin            (explicit; recommended)
@@ -91,6 +98,7 @@ spec:
                 cp -r /opt/dsh-home/. /home/node/.dsh/
               fi
               exec dsh web --host "127.0.0.1" --port "{{ .Values.dshWeb.port }}" \
+                --public-url {{ required "cannot derive the deployment's public root: set oauth2Proxy.publicOrigin to https://<host> (no trailing slash), or set oauth2Proxy.redirectUrl / auth.redirectUri, or enable ingress/istio with a host" $publicOrigin | quote }} \
                 {{- range .Values.dshWeb.trustedHosts }}
                 --trusted-host {{ . | quote }} \
                 {{- end }}
@@ -99,12 +107,10 @@ spec:
               value: /home/node/.dsh
             - name: DSH_TELEMETRY_DISABLED
               value: "1"
-            # Public origin (scheme://host, no trailing slash) of THIS
-            # deployment; see the resolution block above. Load-bearing: it is
-            # what makes the launch-token handoff redirect independent of
-            # X-Forwarded-Proto/Host.
-            - name: DSH_PUBLIC_ORIGIN
-              value: {{ required "cannot derive the deployment's public origin: set oauth2Proxy.publicOrigin to https://<host> (no trailing slash), or set oauth2Proxy.redirectUrl / auth.redirectUri, or enable ingress/istio with a host" $publicOrigin | quote }}
+            # No DSH_PUBLIC_ORIGIN: the public root travels as --public-url
+            # above (the 0.2.1 advertised URL is the single origin truth). The
+            # platform profile still accepts the env var as an explicit
+            # identity-bridge override for hand-rolled manifests.
             # No OIDC_* / ADMIN_GROUPS / SESSION_SECRET here: the in-process
             # gate that read them is retired and the app consumes none of
             # them. The sidecar below reads its own OAUTH2_PROXY_* names, and

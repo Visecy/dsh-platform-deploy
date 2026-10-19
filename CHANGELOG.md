@@ -4,6 +4,24 @@
 没有独立版本号**：镜像 tag 与插件版本都由平台仓的 `v*` tag 决定，因此下面按平台版本记录
 部署侧的变化；平台本体（插件、镜像、DSH 基线）见平台仓的 `CHANGELOG.md`。
 
+## v0.1.90（预览）
+
+`v0.1.90` 相对部署侧上一次记录的 `v0.1.88` 的变化（`v0.1.89` 只升级平台 DSH 基线到
+`0.2.1-rc.2`，部署侧无需变更，chart 默认 pin 随本版一起更新）。**预览版，不面向生产**。
+
+- **默认镜像 tag 对齐到平台 `v0.1.90`**：`charts/dsh-control-plane` 的 `image.dshWeb` /
+  `workspace.image`、`charts/dsh-workspace/values.yaml` 的参考值与
+  `kind/workspace-smoke.yaml` 示例全部指向同一 tag。
+- **对外 URL 单一真值**：控制面 chart 现在把推导出的公网 root 作为 `dsh web --public-url`
+  传给应用容器，并移除了 `DSH_PUBLIC_ORIGIN` env。平台 v0.1.90 的 identity-bridge 从
+  官方 advertised URL（`webApp.getAdvertisedUrl()`）取 handoff base，因此 chart 与
+  profile 不再各自维护一份 origin。`oauth2Proxy.publicOrigin` 的推导顺序、渲染期
+  fail-closed 行为不变；取值仍只支持 origin（无路径）。
+- **镜像要求**：`--public-url` 需要平台 `v0.1.90+` 镜像（DSH 0.2.1 CLI 才认识该 flag）；
+  不要用本 chart 配 `v0.1.88`/`v0.1.89` 镜像。
+- 文档：`docs/deployment.md` §4.3 改为 `--public-url` 语义；验证步骤改为检查启动参数而不是
+  env；`charts/dsh-control-plane` chart version 0.1.0 → 0.1.1。
+
 ## v0.1.88（预览）
 
 `v0.1.88` 相对上一个已发布平台 tag（`v0.1.87`）的部署侧变化。**预览版，不面向生产**，部署限制见

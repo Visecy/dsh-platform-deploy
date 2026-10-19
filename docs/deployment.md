@@ -3,7 +3,7 @@
 面向运维：从零装到能用、怎么验证、怎么升级/回滚/备份，以及**必须自己补的那部分**。
 
 - 平台版本与 DSH 版本的对应关系见 dsh-platform 的 `README.md`（兼容性矩阵）。
-  本文按平台 `v0.1.88` + DSH `0.2.0-rc.2` 编写；镜像与插件版本由平台 tag 决定。
+  本文按平台 `v0.1.90` + DSH `0.2.1-rc.2` 编写；镜像与插件版本由平台 tag 决定。
 - 平台内部结构（组件、数据流、扩展点）见 dsh-platform 的 `docs/architecture.md`。
 
 ## 1. 架构
@@ -111,7 +111,7 @@ kubectl -n dsh-platform create secret generic dsh-oauth2-proxy \
 
 ```bash
 # 用与 chart 版本一致的 tag（两处必须是同一 tag：控制面与工作区 daemon 共享协议）
-TAG=v0.1.88
+TAG=v0.1.90
 
 helm upgrade --install dsh-control-plane ./charts/dsh-control-plane -n dsh-platform \
   --set image.dshWeb=ghcr.io/visecy/dsh-web-platform:${TAG} \
@@ -159,10 +159,15 @@ curl -sI https://dsh.<domain>/ | head -3
 
 # 应用容器 env 应只有字面值的那几个（无任何 OIDC/会话变量）
 kubectl -n dsh-platform get deploy -o jsonpath='{range .items[*].spec.template.spec.containers[?(@.name=="dsh-web")].env[*]}{.name}={.value}{"\n"}{end}'
+
+# 启动脚本里应有 chart 推导出的 --public-url（见 §4.3）
+kubectl -n dsh-platform get deploy -o jsonpath='{range .items[*].spec.template.spec.containers[?(@.name=="dsh-web")].command[*]}{@}{"\n"}{end}' | grep -- --public-url
 ```
 
-期望：`DSH_HOME` / `DSH_TELEMETRY_DISABLED` / `DSH_PUBLIC_ORIGIN` / `WS_*` 有字面值，
-`DSH_PG_CONNECTION_STRING` 来自 Secret；`DSH_PUBLIC_ORIGIN` 等于部署的公网 origin。
+期望：`DSH_HOME` / `DSH_TELEMETRY_DISABLED` / `WS_*` 有字面值，
+`DSH_PG_CONNECTION_STRING` 来自 Secret；应用容器的启动参数里有
+`--public-url <公网 root>`（见 §4.3），且**没有** `DSH_PUBLIC_ORIGIN`（该 env 只保留为
+手工 manifest 的显式覆盖）。
 登录后页面与 `/api` 正常（无 401/403），cordis 装配日志里没有
 `patch: entry "…" not found` 之类的 warn。
 
@@ -192,10 +197,15 @@ sidecar 以 `--reverse-proxy=true` 运行，即信任上游给的 `X-Forwarded-P
 （`/oauth2/*` 重定向、cookie 安全标志、客户端 IP 日志）受客户端影响。网段因部署而异，
 chart 不会内置任何网段。
 
-### 4.3 `oauth2Proxy.publicOrigin` 与 `DSH_PUBLIC_ORIGIN`
+### 4.3 `oauth2Proxy.publicOrigin` 与 `dsh web --public-url`
 
-identity-bridge 用官方 launch-token handoff 提供首页，重定向的 origin 取自应用容器的
-`DSH_PUBLIC_ORIGIN`。chart 的解析顺序（命中即止）：
+chart 把推导出的公网 root 作为 `dsh web --public-url` 传给应用容器。这是部署对外 URL 的
+**唯一真值**：0.2.1 起 profile 把 `web-runtime.publicUrl` 转发到官方的
+`webApp.getAdvertisedUrl()`，identity-bridge 用同一个 root 作为 launch-token handoff 重定向
+的 base，`DSH_WEB_URL` 与运行时上下文也用它。应用容器**不再需要** `DSH_PUBLIC_ORIGIN`
+env（平台 profile 仍把它作为 identity-bridge 的显式覆盖项，供手工 manifest 使用）。
+
+chart 的解析顺序（命中即止）：
 
 1. `oauth2Proxy.publicOrigin`（`https://<host>`，无尾斜杠；推荐显式设置）
 2. `oauth2Proxy.redirectUrl` 的 origin
@@ -204,7 +214,11 @@ identity-bridge 用官方 launch-token handoff 提供首页，重定向的 origi
 5. `istio.enabled=true` → `https://<istio.host>`
 
 都取不到时 chart **渲染即失败**，不会回落到"从请求推导"；取值不是 `scheme://host`
-（带路径或尾斜杠）时同样报错。
+（带路径或尾斜杠）时同样报错。注意：本 chart 目前只支持 origin（不支持子路径前缀）；
+identity-bridge 本身已接受带前缀的 root，子路径发布是平台仓的后续计划。
+
+**镜像要求**：`--public-url` 需要 DSH 0.2.1 线（平台 `v0.1.90+`）的镜像；更早的镜像不认识
+这个 flag。chart 默认 pin 与该能力同批发布。
 
 ## 5. 工作区运行时
 

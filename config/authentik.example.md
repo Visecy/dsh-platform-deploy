@@ -37,7 +37,7 @@
 | `auth.oidcClientSecretRef` | Secret 名（key `oidc-client-secret`）；sidecar 以 `OAUTH2_PROXY_CLIENT_SECRET` 读取 |
 | `oauth2Proxy.cookieSecretRef` / `.cookieSecretKey` | sidecar 会话 cookie 的签名+加密密钥，必须 16/24/32 字节；名字留空时回落到 `auth.sessionSecretRef` |
 | `auth.redirectUri` | 公网回调地址；只有它的 **origin** 参与推导：`oauth2Proxy.redirectUrl` 留空时 sidecar 的 `--redirect-url` = `<origin>/oauth2/callback` |
-| `oauth2Proxy.publicOrigin` | 公网 origin（`https://<host>`，无尾斜杠），作为 `DSH_PUBLIC_ORIGIN` 注入应用，供 launch-token handoff 使用；留空则从上面的 origin 推导 |
+| `oauth2Proxy.publicOrigin` | 公网 origin（`https://<host>`，无尾斜杠），作为 `dsh web --public-url` 传入应用，供 launch-token handoff / `DSH_WEB_URL` 使用；留空则从上面的 origin 推导。需要平台 `v0.1.90+` 镜像 |
 | `oauth2Proxy.trustedProxyIps` | 生产必需：ingress/gateway Pod 的 CIDR，否则 sidecar 信任所有来源的 `X-Forwarded-*` |
 
 ```yaml
@@ -50,7 +50,7 @@ auth:
   sessionSecretRef: dsh-oidc                   # cookie secret 回落来源
 oauth2Proxy:
   redirectUrl: https://<host>/oauth2/callback  # 留空则由 redirectUri 的 origin 推导
-  publicOrigin: https://<host>                 # DSH_PUBLIC_ORIGIN，无尾斜杠
+  publicOrigin: https://<host>                 # --public-url，无尾斜杠
   cookieSecretRef: dsh-oauth2-proxy            # key: cookie-secret
   cookieSecretKey: cookie-secret
   scope: "openid email profile groups"
