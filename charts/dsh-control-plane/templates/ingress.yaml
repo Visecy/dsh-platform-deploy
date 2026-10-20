@@ -1,18 +1,27 @@
 {{- if .Values.ingress.enabled }}
+{{- $publicRoot := include "dsh-control-plane.publicRoot" . }}
+{{- $mountPrefix := include "dsh-control-plane.mountPrefix" . }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "dsh-control-plane.fullname" . }}
   labels:
     {{- include "dsh-control-plane.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- if or .Values.ingress.annotations $mountPrefix }}
   # annotations are map[string]string: quote every value so that a numeric
   # --set (e.g. proxy-read-timeout=3600, which helm parses as int64) cannot
   # render an unquoted number, which the API server rejects. --set-string in
   # docs/deployment.md is still the documented way to pass them.
   annotations:
-    {{- range $key, $value := . }}
+    {{- range $key, $value := .Values.ingress.annotations }}
     {{ $key | quote }}: {{ $value | quote }}
+    {{- end }}
+    {{- if $mountPrefix }}
+    # Subpath publishing: strip the prefix before the sidecar -- the DSH token
+    # exchange only accepts path "/". $1 captures the separator ("/" or the end
+    # of the path), $2 everything after it, so /dsh/assets/x -> /assets/x.
+    "nginx.ingress.kubernetes.io/use-regex": "true"
+    "nginx.ingress.kubernetes.io/rewrite-target": "/$2"
     {{- end }}
   {{- end }}
 spec:
@@ -29,8 +38,13 @@ spec:
     - host: {{ required "ingress.host required" .Values.ingress.host }}
       http:
         paths:
+          {{- if $mountPrefix }}
+          - path: {{ $mountPrefix }}(/|$)(.*)
+            pathType: ImplementationSpecific
+          {{- else }}
           - path: /
             pathType: Prefix
+          {{- end }}
             backend:
               # resolves to the oauth2-proxy sidecar port (service.yaml);
               # WebSocket/SSE tuning, if the class needs it, is in
@@ -39,4 +53,47 @@ spec:
                 name: {{ include "dsh-control-plane.fullname" . }}
                 port:
                   name: http
+{{- if $mountPrefix }}
+---
+# Subpath publishing only. The canonical browser entry point is <root>/ : a
+# bare /<prefix> makes the app's relative asset references resolve against the
+# host root, and oauth2-proxy can bounce the post-login redirect to / . Both /
+# and /<prefix> therefore 301 to <root>/ (see docs/deployment.md §4.4).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "dsh-control-plane.fullname" . }}-redirect
+  labels:
+    {{- include "dsh-control-plane.labels" . | nindent 4 }}
+  annotations:
+    "nginx.ingress.kubernetes.io/permanent-redirect": "{{ $publicRoot }}/"
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tlsSecret }}
+  tls:
+    - hosts:
+        - {{ required "ingress.host required" $.Values.ingress.host }}
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.host required" .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "dsh-control-plane.fullname" . }}
+                port:
+                  name: http
+          - path: {{ $mountPrefix }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "dsh-control-plane.fullname" . }}
+                port:
+                  name: http
+{{- end }}
 {{- end }}

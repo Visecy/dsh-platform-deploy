@@ -1,0 +1,51 @@
+# Istio VirtualService for the SUBPATH rig (P2 / risk B7/R1).
+#
+# Mirrors what charts/dsh-control-plane renders when oauth2Proxy.publicOrigin
+# carries a path (see templates/virtualservice.yaml): the prefix is stripped
+# before the oauth2-proxy sidecar, and the exact paths "/" and "/<prefix>" are
+# 301ed to the canonical "<prefix>/" entry (M1: the post-login fallback for the
+# oauth2-proxy basepath bug and the relative-asset base rule).
+#
+# Root-mode rigs use dsh-vs.yaml instead (single unconditional route).
+#
+# Placeholders: replace svc.example.test / DSH_PREFIX before applying, e.g.
+#
+#   DSH_HOST=dsh-p2.svc.visecy.top  PREFIX=/dsh
+#   sed -e "s/dsh.svc.example.test/$DSH_HOST/g" \
+#       -e "s#/dsh/oauth2/callback#$PREFIX/oauth2/callback#" \
+#       oidc-test/subpath-vs.yaml | kubectl -n dsh-oidc-test apply -f -
+#
+# Route order matters: the prefix route must come first so "<prefix>/oauth2/*",
+# "<prefix>/assets/*", "<prefix>/plugins/*" and "<prefix>/api/*" are rewritten;
+# the exact-match redirect route comes second.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: dsh-control-plane-subpath
+  namespace: dsh-oidc-test
+spec:
+  gateways:
+    - istio-system/internal-gateway
+  hosts:
+    - dsh.svc.example.test
+  http:
+    - match:
+        - uri:
+            prefix: /dsh/
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: dsh-control-plane-dsh-control-plane.dsh-platform.svc.cluster.local
+            port:
+              # the chart's Service publishes only the oauth2-proxy sidecar port
+              number: 4180
+    - match:
+        - uri:
+            exact: /dsh
+        - uri:
+            exact: /
+      redirect:
+        # path only: Envoy builds the Location from the request scheme+host
+        uri: /dsh/
+        redirectCode: 301

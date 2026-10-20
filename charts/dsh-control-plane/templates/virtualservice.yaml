@@ -1,4 +1,5 @@
 {{- if .Values.istio.enabled }}
+{{- $mountPrefix := include "dsh-control-plane.mountPrefix" . }}
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
@@ -11,6 +12,37 @@ spec:
   hosts:
     - {{ required "istio.host required" .Values.istio.host }}
   http:
+{{- if $mountPrefix }}
+    # Subpath publishing. Route order matters: the prefix route strips the
+    # prefix before the sidecar (the DSH token exchange only accepts path /),
+    # the exact-match route that follows 301s / and /<prefix> to <root>/.
+    #
+    # The redirect target is the path only, not the absolute root: Istio maps
+    # redirect.uri to Envoy's path_redirect, and Envoy builds the Location as
+    # <request scheme>://<request host><path> (Http::Utility::newUri() in
+    # source/common/http/utility.cc). An absolute URL here would therefore
+    # render as "https://<host>/https://<host>/<prefix>/"; the path-only value
+    # produces https://<request host>/<prefix>/ , which is <root>/ whenever the
+    # public root host is the gateway host (the supported single-host setup).
+    - match:
+        - uri:
+            prefix: {{ $mountPrefix }}/
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: {{ include "dsh-control-plane.fullname" . }}
+            port:
+              number: {{ .Values.oauth2Proxy.port }}
+    - match:
+        - uri:
+            exact: {{ $mountPrefix }}
+        - uri:
+            exact: /
+      redirect:
+        uri: {{ $mountPrefix }}/
+        redirectCode: 301
+{{- else }}
     - route:
         - destination:
             host: {{ include "dsh-control-plane.fullname" . }}
@@ -22,4 +54,5 @@ spec:
               # disabled unless set, so the WebSocket and SSE endpoints need no
               # extra tuning here.
               number: {{ .Values.oauth2Proxy.port }}
+{{- end }}
 {{- end }}

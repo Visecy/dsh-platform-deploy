@@ -46,8 +46,10 @@
   标签的 Pod 访问 4390（peer 是 label selector，`replicaCount > 1` 时会放行兄弟副本）。
   在不支持 NetworkPolicy 的 CNI 上它等于没有。**建议同时**在命名空间上做 default-deny ingress。
 - **`oauth2Proxy.publicOrigin`**：identity-bridge 的 launch-token handoff 用它作为重定向
-  origin。留空时 chart 会按顺序从 `redirectUrl` / `auth.redirectUri` / ingress / istio 推导，
-  推导不出来就**渲染失败**——不要让它回落到从请求头推导。
+  base。留空时 chart 会按顺序从 `redirectUrl` / `auth.redirectUri` / ingress / istio 推导
+  **origin**，推导不出来就**渲染失败**——不要让它回落到从请求头推导。子路径发布时在这里
+  显式写单段 path（如 `https://dsh.example.com/dsh`），chart 据此派生入口前缀剥离、301、
+  oauth2-proxy 回调与 cookie path（见 `docs/deployment.md` §4.4）。
 - **Secret 与凭据**：连接串、OIDC client secret、cookie secret 都放在已有 Secret 里，
   chart 只引用名字（`dsh-db` / `dsh-oidc` / `dsh-oauth2-proxy`），不要把真值写进 values。
   cookie secret 必须是 16/24/32 字节（或其 base64url），否则 sidecar 直接退出。
@@ -60,7 +62,9 @@
   并且都能列出 / 休眠 / 删除彼此的工作区。**不要把预览版直接暴露给互相不可信的用户群。**
   （`replicaCount` 也必须保持 1：没有 leader election。）
 - 删除工作区会删除它的 PVC，数据不可恢复。
-- 只发布 `linux/amd64`；不支持子路径发布、ReadWriteMany、air-gapped 安装。
+- 只发布 `linux/amd64`；子路径发布仅支持单段前缀，且同 host 只能有一个 DSH 实例（DSH 会话
+  cookie 是 authority 作用域且 `Path=/`，见 `docs/deployment.md` §4.4）；不支持
+  ReadWriteMany、air-gapped 安装。
 
 ## 支持的版本
 

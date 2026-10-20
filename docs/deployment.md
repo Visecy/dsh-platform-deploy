@@ -9,7 +9,7 @@
 ## 1. 架构
 
 ```
-浏览器 ── TLS ── Ingress / Istio gateway（按 host 路由，不支持子路径）
+浏览器 ── TLS ── Ingress / Istio gateway（按 host + 可选单段前缀路由；前缀由入口剥离）
   │
   └─ dsh-control-plane Pod（无状态：readOnlyRootFilesystem，无 PVC）
        ├─ oauth2-proxy sidecar :4180   ← Pod 唯一入口（Service 只暴露它）
@@ -89,7 +89,8 @@ spec:
 ### 3.3 IdP 应用与两个 Secret
 
 1. 在 IdP 注册应用，回调地址 **必须是** `https://<host>/oauth2/callback`
-   （oauth2-proxy 的固定路径；应用自身不注册任何回调路由）。
+   （oauth2-proxy 的固定路径；应用自身不注册任何回调路由）。子路径发布时是
+   `https://<host>/<prefix>/oauth2/callback`，见 §4.4。
    `groups` scope 必须请求到，否则 `ctx.dshAuth` 的用户组为空。
    authentik 样例见 `config/authentik.example.md`。
 2. 两个 Secret：
@@ -204,21 +205,95 @@ chart 把推导出的公网 root 作为 `dsh web --public-url` 传给应用容�
 `webApp.getAdvertisedUrl()`，identity-bridge 用同一个 root 作为 launch-token handoff 重定向
 的 base，`DSH_WEB_URL` 与运行时上下文也用它。应用容器**不再需要** `DSH_PUBLIC_ORIGIN`
 env（平台 profile 仍把它作为 identity-bridge 的显式覆盖项，供手工 manifest 使用）。
+root 中可选的 path 同时是子路径发布的挂载点唯一真值（见 §4.4），不要另外配第二份前缀。
 
 chart 的解析顺序（命中即止）：
 
-1. `oauth2Proxy.publicOrigin`（`https://<host>`，无尾斜杠；推荐显式设置）
+1. `oauth2Proxy.publicOrigin`（`https://<host>[/<prefix>]`，无尾斜杠；推荐显式设置）
 2. `oauth2Proxy.redirectUrl` 的 origin
 3. `auth.redirectUri` 的 origin
 4. `ingress.enabled=true` → `https://<ingress.host>`
 5. `istio.enabled=true` → `https://<istio.host>`
 
-都取不到时 chart **渲染即失败**，不会回落到"从请求推导"；取值不是 `scheme://host`
-（带路径或尾斜杠）时同样报错。注意：本 chart 目前只支持 origin（不支持子路径前缀）；
-identity-bridge 本身已接受带前缀的 root，子路径发布是平台仓的后续计划。
+都取不到时 chart **渲染即失败**，不会回落到"从请求推导"。取值仍受约束：只接受
+`http(s)://host[/单段prefix]`，query / fragment / credentials / 空白 / 多段 path 都会让渲染
+失败。第 2–5 项只能派生 **origin**；要发布到子路径必须在 `oauth2Proxy.publicOrigin` 里显式
+写 path（v1 只支持单段，见 §4.4）。
 
 **镜像要求**：`--public-url` 需要 DSH 0.2.1 线（平台 `v0.1.90+`）的镜像；更早的镜像不认识
-这个 flag。chart 默认 pin 与该能力同批发布。
+这个 flag。子路径发布还要求同一版本线的 identity-bridge 支持带前缀的 advertised root
+（`v0.1.90` 已包含），因此同样不能配更早的镜像。chart 默认 pin 与该能力同批发布。
+
+### 4.4 子路径发布（`https://<host>/<prefix>/`）
+
+chart 支持把控制面挂到**单段**路径前缀下（如 `https://dsh.example.com/dsh/`），与同 host 的
+其他服务共存。**唯一需要改的值是 `oauth2Proxy.publicOrigin` 的 path**：路由、oauth2-proxy
+回调、sidecar cookie path 全部由它派生，不要另外配第二个前缀真值。
+
+```bash
+helm upgrade --install dsh-control-plane ./charts/dsh-control-plane -n dsh-platform \
+  ...（§3.4 的必填项：镜像 tag、数据库 Secret、OIDC Secret、cookie Secret）...
+  --set oauth2Proxy.publicOrigin=https://dsh.<domain>/dsh \
+  --set auth.redirectUri=https://dsh.<domain>/dsh/oauth2/callback \
+  --set dshWeb.trustedHosts[0]=dsh.<domain> \
+  --set ingress.enabled=true \
+  --set ingress.host=dsh.<domain> \
+  --set ingress.className=nginx \
+  --set ingress.tlsSecret=dsh-tls \
+  --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-buffering"=off \
+  --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-read-timeout"=3600 \
+  --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-send-timeout"=3600
+```
+
+要点：
+
+- **入口路径必须是规范根**（带尾斜杠）：`https://dsh.<domain>/dsh/`。`/` 与裸
+  `/dsh` 都会被 chart 渲染的 301 规则送到 `<publicRoot>/`（否则相对资源会解析到 host 根，
+  oauth2-proxy 登录后也可能落回 `/`）。
+- **IdP 回调**：在 IdP 新增/修改为 `https://dsh.<domain>/dsh/oauth2/callback`（旧 root 回调
+  过渡期可保留）。`oauth2Proxy.redirectUrl` 留空时 chart 按 `<publicRoot>/oauth2/callback`
+  派生；显式设置且 path 不在前缀下会**渲染失败**。
+- **路由层二选一**：ingress（`ingress.className` 必须是 `nginx`，否则渲染失败）或 Istio
+  （`--set istio.enabled=true --set istio.host=dsh.<domain>` 替代三个 ingress 值）。两者都
+  不启用时前缀无法剥离，渲染失败。
+- **root 发布不受影响**：`publicOrigin` 不带 path 时渲染输出与旧版本一致（除 chart 版本
+  label），回滚只需把 path 去掉再 `helm upgrade`。
+- `dshWeb.trustedHosts` 仍填公网 authority（fence 只看 authority，不看 path）；
+  `oauth2Proxy.trustedProxyIps` 仍必须设（§4.2）。
+
+**入口/组件要求**（前缀必须由入口剥离，chart 已按此渲染）：
+
+| 组件 | 要求 | 原因 |
+|---|---|---|
+| ingress 路径 | `/<prefix>(/\|$)(.*) → /$2`（`use-regex` + `rewrite-target: /$2`） | dsh web 的 launch-token exchange 只认 path `/`；assets / `/api` / boot 资源也依赖剥离 |
+| Istio 路由 | `match.uri.prefix: /<prefix>/` + `rewrite.uri: /` | 同上；Istio 的 prefix rewrite 只替换匹配到的前缀 |
+| `/` 与 `/<prefix>` | 301 到 `<publicRoot>/`（chart 自动生成第二条 Ingress / 第二条 VS route） | 相对资源按文档 URL 目录解析；oauth2-proxy 登录回跳可能丢前缀，301 兜底 |
+| oauth2-proxy `--redirect-url` | `<publicRoot>/oauth2/callback`（派生；root 模式行为不变） | IdP 回跳必须落在前缀下，再被入口剥成 `/oauth2/callback` |
+| oauth2-proxy `--cookie-path` | `/<prefix>/`（派生；root 模式不渲染该 flag） | sidecar 会话 cookie 不发给同 host 其他服务；与 DSH 自己的 cookie 不冲突 |
+| `--upstream` / `--proxy-prefix` | 不变（`http://127.0.0.1:<port>` / 默认 `/oauth2`） | 剥离发生在入口，不在 sidecar |
+| 流式 | nginx 仍需 `proxy-buffering: "off"` + 长 read/send timeout | SSE `/plugins/events`、WS `/api/remote.mux`（既有要求，前缀不变） |
+
+**cookie 与限制**（v1）：
+
+- **同 host 只能有一个 DSH 实例**：DSH 的会话 cookie 按 authority 作用域且 `Path=/`（上游
+  行为，本仓不改），两个前缀实例会互相覆盖会话。子路径解决"与其它服务共存"，不解决
+  "同 host 多实例"。
+- sidecar 会话 cookie 从 `Path=/` 收窄到 `/<prefix>/` 后，最坏情况是**多登录一次**；数据库与
+  cookie authority 未变，不需要迁移数据。
+- 无前缀书签/旧入口会走 301 到规范根，多一跳但不断链。
+- **验证口径**：**Istio 路径已通过真实集群 e2e**（2026-10-21，`oidc-test/` rig + 新增
+  `oidc-test/subpath-vs.yaml`，chart 0.1.2 + 镜像 v0.1.90 / oauth2-proxy v7.15.5）：31/31 断言
+  PASS，包括 B7 重定向表、302(IdP) → 303(prefix callback) → 302(rd=/) → 301(M1) →
+  302(`/<prefix>/?token`) → 303(`./` + cookie) → 200、assets 与相对 boot 资源 200、
+  `/<prefix>/api` 401（带 cookie 后到应用 handler）、WS `/api/remote.mux` 101、未信任 Host →
+  403、伪造 token 不 500；同一 chart 的 root 模式回归 29/29 PASS。nginx-ingress 路径目前只有
+  `helm template` 渲染断言（chart CI 覆盖）；用 nginx-ingress 上线前，建议按同一张断言表在
+  目标集群验证一遍。
+- **已知上游行为（B7）**：oauth2-proxy 在入口 rewrite 后会把它自己的登录后回跳落到 `/`
+  （上游 issue #1008/#1297；e2e 实测回调后正是 `302 Location: /`）。chart 的
+  `/ → <publicRoot>/` 301（M1）**是登录链路的一部分**，不是可选项；e2e 已验证它把浏览器送回
+  `/<prefix>/` 并完成后续 handoff。若目标集群观测到回跳不收敛，记录重定向表并评估 Alt B
+  （oauth2-proxy 与 app 之间加一层前缀剥离 hop）。
 
 ## 5. 工作区运行时
 
@@ -327,7 +402,9 @@ kubectl -n dsh-platform rollout status deploy/dsh-control-plane-dsh-control-plan
 - **没有多租户授权**：所有通过认证的用户共享同一份会话 / 工作区 / 模型凭据，且都能操作
   彼此的工作区。不要把它直接暴露给互相不可信的用户群。
 - 只发布 `linux/amd64` 与 `linux/arm64` 两种架构（多架构从下一个 tag 起；更早的 tag 只有 amd64）；air-gapped 安装未提供离线清单。
-- 子路径发布（`https://host/dsh`）不支持，只能独占一个 host。
+- 子路径发布只支持**单段**前缀（`https://host/dsh`，需 nginx-ingress 或 Istio 做前缀剥离 +
+  根路径 301，见 §4.4）；且**同 host 只能有一个 DSH 实例**（会话 cookie 是 authority 作用域
+  且 `Path=/`），子路径只解决"与其它服务共存"。
 - 工作区 PVC 固定 `ReadWriteOnce`。
 - 需要 `metrics-server` 才有工作区资源指标（没有时面板显示"指标不可用"，不影响使用）。
 
@@ -338,7 +415,9 @@ kubectl -n dsh-platform rollout status deploy/dsh-control-plane-dsh-control-plan
 | Pod `CreateContainerConfigError` | Secret 名字/键：`dsh-db`（`DSH_PG_CONNECTION_STRING`）、`dsh-oidc`（`oidc-client-secret`）、`dsh-oauth2-proxy`（`cookie-secret`） |
 | sidecar 起不来，日志 `cookie_secret must be 16, 24, or 32 bytes` | cookie secret 长度（16/24/32 字节或对应 base64url） |
 | 浏览器 `/api` 全 403 | `dshWeb.trustedHosts` 是否包含公网 authority |
-| 未登录访问根路径没有跳 IdP | `auth.oidcIssuer` / `auth.oidcClientId` / 回调注册是否与 `https://<host>/oauth2/callback` 一致；`kubectl logs -c oauth2-proxy` |
+| 未登录访问根路径没有跳 IdP | `auth.oidcIssuer` / `auth.oidcClientId` / 回调注册是否与 `https://<host>/oauth2/callback` 一致（子路径：`https://<host>/<prefix>/oauth2/callback`）；`kubectl logs -c oauth2-proxy` |
+| 子路径下访问 `/<prefix>/` 返回 401（token exchange） | 入口没有剥前缀：检查主 Ingress 的 `rewrite-target` / VS 的 `rewrite.uri`，以及 `/` 与裸 `/<prefix>` 的 301 是否存在（§4.4） |
+| 子路径下登录后又落回 host 根 / 404 | oauth2-proxy 的上游 B7 行为；确认 `/ → <publicRoot>/` 的 301 Ingress / VS route 已渲染并生效（`kubectl get ingress -o yaml \| grep permanent-redirect`），IdP 回调在 `/<prefix>/oauth2/callback`（§4.4） |
 | 工作区一直"创建中"或 PVC Pending | `workspace.storageClassName` 是否是该集群真实存在的类 |
 | fs / 命令全部失败 | 控制面能否直连工作区 Pod IP:4390（egress 策略、mTLS、控制面是否在集群内） |
 | 想确认启动期没有配置告警 | `kubectl logs <pod> -c dsh-web \| grep -i warn`，特别是 `patch: entry "…" not found` |

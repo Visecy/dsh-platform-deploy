@@ -4,6 +4,41 @@
 没有独立版本号**：镜像 tag 与插件版本都由平台仓的 `v*` tag 决定，因此下面按平台版本记录
 部署侧的变化；平台本体（插件、镜像、DSH 基线）见平台仓的 `CHANGELOG.md`。
 
+## 未发布（P2 子路径发布）
+
+在 `v0.1.90` 基础上，部署侧新增**子路径发布**能力：控制面可以挂到同 host 的**单段**路径
+前缀下（如 `https://dsh.example.com/dsh/`），与同 host 的其他服务共存。root 发布仍是默认
+路径，渲染输出除 chart 版本 label 外不变。
+
+- **chart 从 `oauth2Proxy.publicOrigin` 的 path 派生全部前缀行为（单一真值）**：
+  `dsh web --public-url` 保留带前缀的 root；ingress 主 Ingress 增加
+  `nginx.ingress.kubernetes.io/use-regex` / `rewrite-target: /$2` 与
+  `<prefix>(/|$)(.*)` 路径（前缀剥离后再交给 sidecar —— DSH 的 launch-token exchange 只认
+  `/`），并新增一条 301 Ingress（`/` 与裸 `/<prefix>` → `<root>/`，保证相对资源基址和
+  oauth2-proxy 登录回跳自愈）；Istio VirtualService 增加 prefix match + `rewrite.uri: /`
+  与精确 match 的 301 route（redirect 用 path 而非绝对 URL —— Envoy 的 `path_redirect`
+  会把绝对 URL 拼在 host 之后）。
+- **oauth2-proxy 前缀感知**：`--redirect-url` 在子路径模式下派生为
+  `<root>/oauth2/callback`；新增 `--cookie-path=/<prefix>/`（root 模式不渲染该 flag，输出
+  保持不变）。
+- **渲染期 fail-fast**：多段前缀、query / fragment / credentials / 空白、前缀但无路由层、
+  前缀 + `ingress.className` 非 `nginx`、前缀 + 用户注解已含 `rewrite-target` /
+  `use-regex`、前缀 + 显式 `redirectUrl` 不在前缀下 —— 全部渲染失败并给出明确 message。
+- **文档**：`docs/deployment.md` §4.3 改为 root 允许 `host[/单段 prefix]`，新增 §4.4
+  「子路径发布」（values 示例、IdP 回调注册、ingress/Istio 与 oauth2-proxy 配置要求表、
+  301 行为、cookie 说明、限制）；§8 限制与 `SECURITY.md` 同步。
+- **CI**：`.github/workflows/charts.yml` 增加前缀模式渲染断言、root 模式无前缀产物断言，
+  以及 6 条 fail-render 负向用例。
+- chart version `0.1.1` → `0.1.2`；**镜像 tag 未变**（仍为 v0.1.90）。
+
+**限制（v1）**：只支持单段前缀；**同 host 只能有一个 DSH 实例**（DSH 会话 cookie 是
+authority 作用域 + `Path=/`，上游行为，子路径只解决"与其它服务共存"）。**Istio 路径已通过
+真实集群 e2e**（2026-10-21，chart 0.1.2 + 镜像 v0.1.90 / oauth2-proxy v7.15.5）：前缀模式
+31/31 断言 PASS（含 B7 重定向表与 M1 兜底），root 模式回归 29/29 PASS；nginx-ingress 路径目前
+只有 CI 渲染断言，上线前需在目标集群按同一断言表验证。oauth2-proxy 在入口 rewrite 后会把登录
+回跳落到 `/`（上游 issue #1008/#1297，e2e 实测），由 `/` 与裸 `/<prefix>` → `<root>/` 的 301
+兜底 —— 该 301 是登录链路的一部分，不是可选项。
+
 ## v0.1.90（预览）
 
 `v0.1.90` 相对部署侧上一次记录的 `v0.1.88` 的变化（`v0.1.89` 只升级平台 DSH 基线到

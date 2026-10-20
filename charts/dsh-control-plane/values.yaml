@@ -83,21 +83,41 @@ oauth2Proxy:
   scope: "openid email profile groups"
   # OIDC claim that carries the user's groups.
   groupsClaim: groups
-  # Public root browsers use: scheme://host, NO trailing slash (e.g.
-  # https://dsh.example.com). The chart passes it to `dsh web` as
-  # `--public-url`; the app then advertises it through the official
-  # `webApp.getAdvertisedUrl()`, which identity-bridge uses as the base of the
-  # launch-token handoff redirect (and DSH_WEB_URL uses for the runtime
-  # context). Leave empty to derive it from, in order, the origin of
-  # redirectUrl, the origin of auth.redirectUri, https://<ingress.host> (when
-  # ingress.enabled), https://<istio.host> (when istio.enabled). If none of
-  # those is set the chart FAILS to render on purpose: with no pinned root the
-  # handoff would derive it from the request's X-Forwarded-Proto/Host, which a
-  # client can influence unless trustedProxyIps is set (see below).
+  # Public root browsers use: scheme://host[/<prefix>], NO trailing slash (e.g.
+  # https://dsh.example.com, or https://dsh.example.com/dsh). The chart passes
+  # it to `dsh web` as `--public-url`; the app then advertises it through the
+  # official `webApp.getAdvertisedUrl()`, which identity-bridge uses as the base
+  # of the launch-token handoff redirect (and DSH_WEB_URL uses for the runtime
+  # context).
+  #
+  # A path switches on SUBPATH PUBLISHING (v1: exactly one path segment, e.g.
+  # /dsh). Everything is derived from this one value -- the ingress
+  # prefix-strip regex (or the Istio prefix match + rewrite), the / and /<prefix>
+  # 301 Ingress/VirtualService route, the oauth2-proxy callback URL, and the
+  # sidecar cookie path. The render fails fast when that cannot work: no routing
+  # layer enabled, ingress.className not nginx, user annotations that already set
+  # rewrite-target/use-regex, or an explicit redirectUrl outside the prefix.
+  # See docs/deployment.md §4.4 and SECURITY.md for the limitations (one DSH
+  # instance per host; single-segment prefix only).
+  #
+  # Leave empty to derive an ORIGIN from, in order, the origin of redirectUrl,
+  # the origin of auth.redirectUri, https://<ingress.host> (when
+  # ingress.enabled), https://<istio.host> (when istio.enabled). Those derived
+  # sources are origins only: subpath publishing must set publicOrigin
+  # explicitly. If no root is derivable the chart FAILS to render on purpose:
+  # with no pinned root the handoff would derive it from the request's
+  # X-Forwarded-Proto/Host, which a client can influence unless trustedProxyIps
+  # is set (see below).
   publicOrigin: ""
   # Redirect URL registered at the IdP. oauth2-proxy's callback path is
   # /oauth2/callback -- NOT auth.redirectUri's path, which is never served.
-  # Leave empty to derive <auth.redirectUri origin>/oauth2/callback.
+  # Leave empty to derive it: in root publishing
+  # <auth.redirectUri origin>/oauth2/callback, in subpath publishing
+  # <publicRoot>/oauth2/callback (e.g.
+  # https://dsh.example.com/dsh/oauth2/callback, because the ingress/gateway
+  # strips the prefix again before the sidecar). An explicit value must stay
+  # under the mount prefix when a prefix is configured, or the render fails: a
+  # callback registered at the host root would 404 / loop.
   redirectUrl: ""
   # Secret name/key holding the cookie signing+encryption key. An empty name
   # reuses auth.sessionSecretRef. The value MUST be exactly 16, 24 or 32
@@ -105,6 +125,12 @@ oauth2Proxy:
   # python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
   cookieSecretRef: ""
   cookieSecretKey: session-secret
+  # The sidecar session cookie's Path is derived from publicOrigin, not a
+  # separate value: "/" in root publishing (the oauth2-proxy default -- no
+  # --cookie-path flag is rendered, so the output is unchanged) and "/<prefix>/"
+  # in subpath publishing (rendered as --cookie-path=/<prefix>/). It is
+  # deliberately not exposed as a knob: it must always agree with the mount
+  # prefix, or the browser stops sending the session cookie to the right paths.
   # Source CIDRs allowed to set X-Forwarded-* for this proxy, mapped to
   # `--trusted-proxy-ip` (repeat the --set for every hop that may add or
   # rewrite X-Forwarded-*).
@@ -202,6 +228,24 @@ ingress:
   #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
   #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
   # Istio/Envoy (virtualservice.yaml) streams by default and needs none.
+  #
+  # ROOT PUBLISHING (no path in oauth2Proxy.publicOrigin) renders exactly the
+  # same single Ingress as before: one path "/" with pathType Prefix and no
+  # rewrite annotations.
+  #
+  # SUBPATH PUBLISHING derives the routes from the public root's path and adds:
+  #   * on this Ingress: nginx.ingress.kubernetes.io/use-regex "true" and
+  #     rewrite-target "/$2", path "<prefix>(/|$)(.*)" with pathType
+  #     ImplementationSpecific -- the prefix is stripped before the sidecar
+  #     (the DSH token exchange only accepts path "/");
+  #   * a second Ingress "<fullname>-redirect" with pathType Exact paths "/" and
+  #     "<prefix>", annotated nginx.ingress.kubernetes.io/permanent-redirect to
+  #     "<publicRoot>/" (301). The trailing-slash entry point is required: bare
+  #     /<prefix> would resolve the app's relative assets against the host root,
+  #     and oauth2-proxy can bounce its post-login redirect to "/".
+  # The streaming annotations above are merged into the prefix-mode Ingress
+  # unchanged. Prefix routing with an Ingress requires ingress.className=nginx
+  # (the render fails otherwise); on Istio use istio.enabled instead.
   annotations: {}
 
 resources: {}
@@ -209,7 +253,18 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Istio exposure via an internal gateway
+# Istio exposure via an internal gateway.
+# Root publishing (no path in oauth2Proxy.publicOrigin) renders the same
+# catch-all route as before. Subpath publishing renders, in this order:
+#   1. match uri.prefix "<prefix>/" + rewrite uri "/" -> the prefix is stripped
+#      before the sidecar (the DSH token exchange only accepts path "/");
+#   2. exact-match "/" and "<prefix>" -> redirectCode 301 to "<prefix>/".
+#      The redirect target is a path, not the absolute root: Istio maps it to
+#      Envoy's path_redirect, which builds <request scheme>://<request host><path>
+#      -- an absolute URL there would be appended, not replaced. For the
+#      supported single-host setup the result is <publicRoot>/.
+# Subpath publishing needs exactly one routing layer that can strip the prefix:
+# enable ingress (nginx) or istio, not neither.
 istio:
   enabled: false
   gateway: istio-system/internal-gateway

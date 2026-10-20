@@ -43,6 +43,144 @@ jobs:
             --set ingress.className=nginx \
             --set ingress.tlsSecret=dsh-tls > /dev/null
 
+      # Root publishing (no path in the public root) is the default path and
+      # must not gain any subpath artifact: no regex rewrite, no extra 301
+      # Ingress, no narrowed sidecar cookie. This is the CI stand-in for the
+      # "root render is byte-identical to the previous chart" regression.
+      - name: Root-mode render has no subpath artifacts
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/root.yaml"
+          helm template dsh-control-plane charts/dsh-control-plane -n dsh-platform \
+            --set auth.oidcIssuer=https://authentik.example.com/application/o/dsh-platform/ \
+            --set auth.oidcClientId=test-client \
+            --set auth.redirectUri=https://dsh.example.com/oauth2/callback \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com \
+            --set oauth2Proxy.trustedProxyIps[0]=10.0.0.0/8 \
+            --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
+            --set oauth2Proxy.cookieSecretKey=cookie-secret \
+            --set auth.oidcClientSecretRef=dsh-oidc \
+            --set dshWeb.trustedHosts[0]=dsh.example.com \
+            --set ingress.enabled=true \
+            --set ingress.host=dsh.example.com \
+            --set ingress.className=nginx \
+            --set ingress.tlsSecret=dsh-tls > "$OUT"
+
+          if grep -Eq 'rewrite-target|permanent-redirect|use-regex|cookie-path' "$OUT"; then
+            echo "FATAL: root-mode render contains subpath-publishing artifacts:"
+            grep -nE 'rewrite-target|permanent-redirect|use-regex|cookie-path' "$OUT"
+            exit 1
+          fi
+          grep -Fq -- '--public-url "https://dsh.example.com"' "$OUT"
+          grep -Fq -- '--redirect-url=https://dsh.example.com/oauth2/callback' "$OUT"
+          grep -Fq 'path: /' "$OUT"
+          grep -Fq 'pathType: Prefix' "$OUT"
+          # exactly one Ingress (the main one; no 301 redirect Ingress)
+          test "$(grep -c '^kind: Ingress$' "$OUT")" -eq 1
+          # no DSH_PUBLIC_ORIGIN env (P1 removed it; --public-url is the truth)
+          ! grep -Fq -- '- name: DSH_PUBLIC_ORIGIN' "$OUT"
+          echo "ok root-mode render: no rewrite/301/cookie-path, --public-url present"
+
+      # Subpath publishing: everything is derived from oauth2Proxy.publicOrigin's
+      # path. These are the plan's §4.4 assertions 1-5.
+      - name: Prefix-mode render assertions (ingress / nginx)
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/prefix.yaml"
+          helm template dsh-control-plane charts/dsh-control-plane -n dsh-platform \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/dsh \
+            --set dshWeb.trustedHosts[0]=dsh.example.com \
+            --set auth.oidcIssuer=https://idp.example.com \
+            --set auth.oidcClientId=dsh-platform \
+            --set auth.oidcClientSecretRef=dsh-oidc \
+            --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
+            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.90 \
+            --set ingress.enabled=true \
+            --set ingress.host=dsh.example.com \
+            --set ingress.className=nginx > "$OUT"
+
+          fail=0
+          check() { # check <description> <fixed string>
+            if grep -Fq -- "$2" "$OUT"; then
+              echo "ok   $1"
+            else
+              echo "FAIL $1 (missing: $2)"
+              fail=1
+            fi
+          }
+          checknot() { # must NOT appear
+            if grep -Fq -- "$2" "$OUT"; then
+              echo "FAIL $1 (unexpected: $2)"
+              fail=1
+            else
+              echo "ok   $1"
+            fi
+          }
+
+          # 1. the prefixed root reaches dsh web as --public-url
+          check   "public-url carries the mount prefix" '--public-url "https://dsh.example.com/dsh"'
+          # 2. main Ingress strips the prefix with a regex + nginx annotations
+          check   "main ingress regex path" 'path: /dsh(/|$)(.*)'
+          check   "main ingress pathType ImplementationSpecific" 'pathType: ImplementationSpecific'
+          check   "main ingress use-regex annotation" '"nginx.ingress.kubernetes.io/use-regex": "true"'
+          check   "main ingress rewrite-target annotation" '"nginx.ingress.kubernetes.io/rewrite-target": "/$2"'
+          # 3. second Ingress 301s / and /dsh to the trailing-slash root
+          check   "301 ingress permanent-redirect" '"nginx.ingress.kubernetes.io/permanent-redirect": "https://dsh.example.com/dsh/"'
+          test "$(grep -c 'pathType: Exact' "$OUT")" -eq 2 \
+            || { echo "FAIL 301 ingress must have exactly two Exact paths"; fail=1; }
+          grep -Eq -- '- path: /$' "$OUT"   || { echo "FAIL 301 ingress missing exact path /"; fail=1; }
+          grep -Eq -- '- path: /dsh$' "$OUT" || { echo "FAIL 301 ingress missing exact path /dsh"; fail=1; }
+          # 4. oauth2-proxy is prefix-aware: callback + cookie path
+          check   "sidecar redirect-url under the prefix" '- --redirect-url=https://dsh.example.com/dsh/oauth2/callback'
+          check   "sidecar cookie-path narrowed to the prefix" '- --cookie-path=/dsh/'
+          # 5. image pins unchanged by P2; DSH_PUBLIC_ORIGIN env still absent
+          check   "control-plane image pin unchanged" 'ghcr.io/visecy/dsh-web-platform:v0.1.90'
+          check   "workspace image pin unchanged" 'ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.90'
+          checknot "no DSH_PUBLIC_ORIGIN env" '- name: DSH_PUBLIC_ORIGIN'
+          # user streaming annotations still merge into the prefixed Ingress
+          # (not passed here, so the chart-rendered annotations must stand alone)
+
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "ok prefix-mode ingress render"
+
+      # The Istio path renders the same strip + 301 in a VirtualService. The
+      # redirect target is a path (Envoy's path_redirect builds
+      # <scheme>://<host><path>; an absolute URL would be appended, not
+      # replaced), so assert route order + both mechanisms instead of a root URL.
+      - name: Prefix-mode render assertions (Istio)
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/prefix-istio.yaml"
+          helm template dsh-control-plane charts/dsh-control-plane -n dsh-platform \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/dsh \
+            --set dshWeb.trustedHosts[0]=dsh.example.com \
+            --set auth.oidcIssuer=https://idp.example.com \
+            --set auth.oidcClientId=dsh-platform \
+            --set auth.oidcClientSecretRef=dsh-oidc \
+            --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
+            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.90 \
+            --set istio.enabled=true \
+            --set istio.host=dsh.example.com > "$OUT"
+
+          fail=0
+          check() { if grep -Fq -- "$2" "$OUT"; then echo "ok   $1"; else echo "FAIL $1 (missing: $2)"; fail=1; fi; }
+          check "VS prefix match" 'prefix: /dsh/'
+          check "VS prefix strip rewrite" 'uri: /'
+          check "VS exact match /dsh" 'exact: /dsh'
+          check "VS exact match /" 'exact: /'
+          check "VS redirect status 301" 'redirectCode: 301'
+          check "VS redirect target is the prefixed path" 'uri: /dsh/'
+          # route order: the prefix route must come BEFORE the 301 redirect route
+          prefix_line=$(grep -n 'prefix: /dsh/' "$OUT" | head -1 | cut -d: -f1)
+          redirect_line=$(grep -n 'redirectCode: 301' "$OUT" | head -1 | cut -d: -f1)
+          if [ -n "$prefix_line" ] && [ -n "$redirect_line" ] && [ "$prefix_line" -lt "$redirect_line" ]; then
+            echo "ok   VS route order (prefix route before 301 route)"
+          else
+            echo "FAIL VS route order (prefix route must precede the 301 route)"; fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "ok prefix-mode Istio render"
+
       # Fail-closed is a feature, not an accident: no OIDC settings must not
       # render a control plane that cannot authenticate anyone.
       - name: Missing required values must fail the render
@@ -50,6 +188,55 @@ jobs:
           if helm template dsh-control-plane charts/dsh-control-plane -n dsh-platform > /dev/null 2>&1; then
             echo "FATAL: the chart rendered without auth.oidcIssuer / cookie secret refs"; exit 1
           fi
+
+      # Subpath misconfigurations must fail the render with a clear message, not
+      # produce a deployment that 401s the token exchange or loops at login.
+      - name: Subpath fail-fast renders must fail
+        run: |
+          set -uo pipefail
+          BASE=( -n dsh-platform
+            --set dshWeb.trustedHosts[0]=dsh.example.com
+            --set auth.oidcIssuer=https://idp.example.com
+            --set auth.oidcClientId=dsh-platform
+            --set auth.oidcClientSecretRef=dsh-oidc
+            --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy
+            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.90 )
+          INGRESS=( --set ingress.enabled=true --set ingress.host=dsh.example.com --set ingress.className=nginx )
+          failed=0
+          expect_fail() { # expect_fail <description> <expected-message-substring> <helm args...>
+            local desc="$1" needle="$2"; shift 2
+            local err="$RUNNER_TEMP/fail-render.err"
+            if helm template dsh-control-plane charts/dsh-control-plane "${BASE[@]}" "$@" >/dev/null 2>"$err"; then
+              echo "FATAL: $desc rendered but must fail"; failed=1
+            elif ! grep -Fq -- "$needle" "$err"; then
+              echo "FATAL: $desc failed without the expected message '$needle':"; cat "$err"; failed=1
+            else
+              echo "ok   $desc"
+            fi
+          }
+          # multi-segment prefix (v1 supports one segment only)
+          expect_fail "multi-segment prefix fails" "multi-segment path" "${INGRESS[@]}" \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/a/b
+          # query string in the public root
+          expect_fail "query in public root fails" "query string" "${INGRESS[@]}" \
+            --set oauth2Proxy.publicOrigin='https://dsh.example.com/dsh?x=1'
+          # a prefix with no routing layer cannot strip it
+          expect_fail "prefix without routing layer fails" "no routing layer is enabled" \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/dsh
+          # non-nginx ingress class cannot use the chart's annotations
+          expect_fail "prefix with non-nginx ingress class fails" "requires ingress.className=nginx" \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/dsh \
+            --set ingress.enabled=true --set ingress.host=dsh.example.com --set ingress.className=traefik
+          # user annotations that fight the chart-rendered rewrite
+          expect_fail "conflicting rewrite-target annotation fails" "rewrite-target" "${INGRESS[@]}" \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/dsh \
+            --set-string 'ingress.annotations.nginx\.ingress\.kubernetes\.io/rewrite-target=/x'
+          # explicit callback outside the prefix = login loop
+          expect_fail "redirectUrl outside the prefix fails" "must be the prefixed callback" "${INGRESS[@]}" \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/dsh \
+            --set oauth2Proxy.redirectUrl=https://dsh.example.com/oauth2/callback
+          if [ "$failed" -ne 0 ]; then exit 1; fi
+          echo "ok all subpath fail-fast cases failed with the expected message"
 
       # charts/dsh-workspace is a values-only reference: it must keep rendering
       # (empty) rather than grow a second, competing owner of workspace pods.

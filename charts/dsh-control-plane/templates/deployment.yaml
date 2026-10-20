@@ -52,26 +52,11 @@ spec:
       #   4. https://<ingress.host>   when ingress.enabled
       #   5. https://<istio.host>     when istio.enabled
       # Nothing derivable is a render error: never fall back to the request.
-      {{- $publicOrigin := .Values.oauth2Proxy.publicOrigin | trimSuffix "/" }}
-      {{- if not $publicOrigin }}
-      {{- range (list .Values.oauth2Proxy.redirectUrl .Values.auth.redirectUri) }}
-      {{- if not $publicOrigin }}
-      {{- $parsed := urlParse . }}
-      {{- if and $parsed.scheme $parsed.host }}
-      {{- $publicOrigin = printf "%s://%s" $parsed.scheme $parsed.host }}
-      {{- end }}
-      {{- end }}
-      {{- end }}
-      {{- end }}
-      {{- if and (not $publicOrigin) .Values.ingress.enabled .Values.ingress.host }}
-      {{- $publicOrigin = printf "https://%s" .Values.ingress.host }}
-      {{- end }}
-      {{- if and (not $publicOrigin) .Values.istio.enabled .Values.istio.host }}
-      {{- $publicOrigin = printf "https://%s" .Values.istio.host }}
-      {{- end }}
-      {{- if and $publicOrigin (not (regexMatch "^https?://[^/]+$" $publicOrigin)) }}
-      {{- fail (printf "public origin %q is not scheme://host (no path, no trailing slash): check oauth2Proxy.publicOrigin / oauth2Proxy.redirectUrl / auth.redirectUri, e.g. https://dsh.example.com" $publicOrigin) }}
-      {{- end }}
+      {{- /* Shared derivation + validation: see _helpers.tpl. Root publishing
+             ($mountPrefix == "") keeps the pre-subpath output byte for byte;
+             a path in the public root switches on subpath publishing. */}}
+      {{- $publicRoot := include "dsh-control-plane.publicRoot" . }}
+      {{- $mountPrefix := include "dsh-control-plane.mountPrefix" . }}
       containers:
         # ── dsh web platform image: self-contained (plugins baked in at
         #    /opt/dsh-home by the release pipeline).
@@ -98,7 +83,7 @@ spec:
                 cp -r /opt/dsh-home/. /home/node/.dsh/
               fi
               exec dsh web --host "127.0.0.1" --port "{{ .Values.dshWeb.port }}" \
-                --public-url {{ required "cannot derive the deployment's public root: set oauth2Proxy.publicOrigin to https://<host> (no trailing slash), or set oauth2Proxy.redirectUrl / auth.redirectUri, or enable ingress/istio with a host" $publicOrigin | quote }} \
+                --public-url {{ required "cannot derive the deployment's public root: set oauth2Proxy.publicOrigin to https://<host>[/<prefix>] (no trailing slash), or set oauth2Proxy.redirectUrl / auth.redirectUri, or enable ingress/istio with a host" $publicRoot | quote }} \
                 {{- range .Values.dshWeb.trustedHosts }}
                 --trusted-host {{ . | quote }} \
                 {{- end }}
@@ -184,9 +169,16 @@ spec:
         {{- $cookieSecretRef := .Values.oauth2Proxy.cookieSecretRef | default .Values.auth.sessionSecretRef }}
         {{- $redirectUrl := .Values.oauth2Proxy.redirectUrl }}
         {{- if not $redirectUrl }}
+        {{- if $mountPrefix }}
+        {{- /* Subpath publishing: the IdP callback must live under the prefix
+               (the ingress/gateway strips the prefix again before the sidecar).
+               Root publishing keeps the origin-era derivation unchanged. */}}
+        {{- $redirectUrl = printf "%s/oauth2/callback" $publicRoot }}
+        {{- else }}
         {{- $parsed := urlParse .Values.auth.redirectUri }}
         {{- if and $parsed.scheme $parsed.host }}
         {{- $redirectUrl = printf "%s://%s/oauth2/callback" $parsed.scheme $parsed.host }}
+        {{- end }}
         {{- end }}
         {{- end }}
         - name: oauth2-proxy
@@ -250,6 +242,14 @@ spec:
             - --http-address=0.0.0.0:{{ .Values.oauth2Proxy.port }}
             {{- with $redirectUrl }}
             - --redirect-url={{ . }}
+            {{- end }}
+            {{- if $mountPrefix }}
+            {{- /* Narrow the sidecar session cookie to the mount point so it is
+                   not sent to other services on the same host. Root publishing
+                   keeps the sidecar default (Path=/), i.e. no flag. The DSH
+                   app cookie is authority-scoped with Path=/ and is untouched
+                   by upstream design -- see docs/deployment.md §4.4. */}}
+            - --cookie-path={{ $mountPrefix }}/
             {{- end }}
             # -- long-lived connections: /api/remote.mux (WebSocket) and
             # /plugins/events (SSE) must not be buffered or cut. FlushInterval
