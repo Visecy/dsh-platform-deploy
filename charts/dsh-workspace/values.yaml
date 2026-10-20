@@ -21,7 +21,7 @@
 # optional NetworkPolicy is `<id>-netpol`.
 
 # MUST be built from the same platform tag as the control-plane image.
-image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.90
+image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.92
 daemonPort: 4390
 
 # Per-workspace PVC (created by the manager).

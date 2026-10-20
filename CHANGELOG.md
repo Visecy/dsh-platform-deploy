@@ -10,6 +10,13 @@
 前缀下（如 `https://dsh.example.com/dsh/`），与同 host 的其他服务共存。root 发布仍是默认
 路径，渲染输出除 chart 版本 label 外不变。
 
+- **默认镜像 tag 对齐平台 `v0.1.92`（chart 0.1.2 → 0.1.3）**：`image.dshWeb`、
+  `workspace.image` 与 `charts/dsh-workspace` 的 daemon 引用一起提到 `v0.1.92`。该版本包含
+  两个 0.2.1 线上修复：**v0.1.89/v0.1.90 镜像的「新建终端」不可用**
+  （`subprocess.terminalEnvironment` seam 缺失，v0.1.91 修复），以及 **v0.1.91 的工作区在
+  ensure 失败后可能永久停在「正在唤醒」**（v0.1.92 修复），因此 chart 不再默认 pin 旧 tag。
+  root/prefix 渲染逻辑与 0.1.2 完全相同，本次只改默认 pin、文档与 CI 断言。
+
 - **chart 从 `oauth2Proxy.publicOrigin` 的 path 派生全部前缀行为（单一真值）**：
   `dsh web --public-url` 保留带前缀的 root；ingress 主 Ingress 增加
   `nginx.ingress.kubernetes.io/use-regex` / `rewrite-target: /$2` 与
