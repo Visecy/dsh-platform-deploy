@@ -110,6 +110,13 @@ Subpath renders fail fast when the deployment cannot actually work:
 {{- end -}}
 {{- end -}}
 {{- if $prefix -}}
+{{/* v1 interpolates the prefix into an nginx regex path and an Istio prefix
+     match, and its single-segment contract must not be bypassable through
+     percent-encoding. Restrict it to the URL-safe charset that needs no regex
+     escaping and cannot contain a path separator. */}}
+{{- if not (regexMatch "^/[A-Za-z0-9_-]+$" $prefix) -}}
+{{- fail (printf "public root %q carries the path prefix %q, which v1 does not accept: the prefix must be one segment of [A-Za-z0-9_-] (no dot, parenthesis, percent-encoding or repeated slashes), so the same value is safe as an nginx regex path and as an Istio prefix match" $root $prefix) -}}
+{{- end -}}
 {{- if not (or .Values.ingress.enabled .Values.istio.enabled) -}}
 {{- fail (printf "public root %q carries the path prefix %q but no routing layer is enabled: the prefix must be stripped before dsh web (its token exchange only accepts path /), so enable ingress.enabled=true (ingress.className=nginx) or istio.enabled=true" $root $prefix) -}}
 {{- end -}}

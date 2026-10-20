@@ -217,6 +217,12 @@ jobs:
           # multi-segment prefix (v1 supports one segment only)
           expect_fail "multi-segment prefix fails" "multi-segment path" "${INGRESS[@]}" \
             --set oauth2Proxy.publicOrigin=https://dsh.example.com/a/b
+          # v1 charset: a prefix interpolated into the nginx regex must not carry
+          # regex metacharacters, dots or percent-encoding
+          expect_fail "dot in prefix fails" "must be one segment of [A-Za-z0-9_-]" "${INGRESS[@]}" \
+            --set oauth2Proxy.publicOrigin=https://dsh.example.com/dsh.x
+          expect_fail "percent-encoded prefix fails" "must be one segment of [A-Za-z0-9_-]" "${INGRESS[@]}" \
+            --set oauth2Proxy.publicOrigin='https://dsh.example.com/dsh%2Fx'
           # query string in the public root
           expect_fail "query in public root fails" "query string" "${INGRESS[@]}" \
             --set oauth2Proxy.publicOrigin='https://dsh.example.com/dsh?x=1'

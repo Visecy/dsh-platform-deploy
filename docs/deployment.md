@@ -278,6 +278,9 @@ helm upgrade --install dsh-control-plane ./charts/dsh-control-plane -n dsh-platf
 - **同 host 只能有一个 DSH 实例**：DSH 的会话 cookie 按 authority 作用域且 `Path=/`（上游
   行为，本仓不改），两个前缀实例会互相覆盖会话。子路径解决"与其它服务共存"，不解决
   "同 host 多实例"。
+- **前缀只支持单段，字符集 `[A-Za-z0-9_-]`**：该值同时进入 nginx 的正则 path 与 Istio 的
+  prefix match，所以含 `.`、括号、百分号编码（如 `%2F`）、`..` 或多段的 root 会**渲染失败**；
+  需要其它字符时先改 chart 模板（加上转义/校验）再放开。
 - sidecar 会话 cookie 从 `Path=/` 收窄到 `/<prefix>/` 后，最坏情况是**多登录一次**；数据库与
   cookie authority 未变，不需要迁移数据。
 - 无前缀书签/旧入口会走 301 到规范根，多一跳但不断链。

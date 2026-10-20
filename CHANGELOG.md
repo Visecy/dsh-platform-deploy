@@ -31,8 +31,9 @@
   以及 6 条 fail-render 负向用例。
 - chart version `0.1.1` → `0.1.2`；**镜像 tag 未变**（仍为 v0.1.90）。
 
-**限制（v1）**：只支持单段前缀；**同 host 只能有一个 DSH 实例**（DSH 会话 cookie 是
-authority 作用域 + `Path=/`，上游行为，子路径只解决"与其它服务共存"）。**Istio 路径已通过
+**限制（v1）**：只支持单段前缀，字符集 `[A-Za-z0-9_-]`（该值同时进入 nginx 正则 path 与
+Istio prefix match，渲染期拒绝 `.`/括号/百分号编码/多段）；**同 host 只能有一个 DSH 实例**（DSH
+会话 cookie 是 authority 作用域 + `Path=/`，上游行为，子路径只解决"与其它服务共存"）。**Istio 路径已通过
 真实集群 e2e**（2026-10-21，chart 0.1.2 + 镜像 v0.1.90 / oauth2-proxy v7.15.5）：前缀模式
 31/31 断言 PASS（含 B7 重定向表与 M1 兜底），root 模式回归 29/29 PASS；nginx-ingress 路径目前
 只有 CI 渲染断言，上线前需在目标集群按同一断言表验证。oauth2-proxy 在入口 rewrite 后会把登录
