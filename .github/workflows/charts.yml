@@ -94,7 +94,7 @@ jobs:
             --set auth.oidcClientId=dsh-platform \
             --set auth.oidcClientSecretRef=dsh-oidc \
             --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
-            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.93 \
+            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.95 \
             --set ingress.enabled=true \
             --set ingress.host=dsh.example.com \
             --set ingress.className=nginx > "$OUT"
@@ -134,8 +134,8 @@ jobs:
           check   "sidecar redirect-url under the prefix" '- --redirect-url=https://dsh.example.com/dsh/oauth2/callback'
           check   "sidecar cookie-path narrowed to the prefix" '- --cookie-path=/dsh/'
           # 5. image pins unchanged by P2; DSH_PUBLIC_ORIGIN env still absent
-          check   "control-plane image pin is the v0.1.93 tag" 'ghcr.io/visecy/dsh-web-platform:v0.1.93'
-          check   "workspace image pin is the v0.1.93 tag" 'ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.93'
+          check   "control-plane image pin is the v0.1.95 tag" 'ghcr.io/visecy/dsh-web-platform:v0.1.95'
+          check   "workspace image pin is the v0.1.95 tag" 'ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.95'
           checknot "no DSH_PUBLIC_ORIGIN env" '- name: DSH_PUBLIC_ORIGIN'
           # user streaming annotations still merge into the prefixed Ingress
           # (not passed here, so the chart-rendered annotations must stand alone)
@@ -158,7 +158,7 @@ jobs:
             --set auth.oidcClientId=dsh-platform \
             --set auth.oidcClientSecretRef=dsh-oidc \
             --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy \
-            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.93 \
+            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.95 \
             --set istio.enabled=true \
             --set istio.host=dsh.example.com > "$OUT"
 
@@ -200,7 +200,7 @@ jobs:
             --set auth.oidcClientId=dsh-platform
             --set auth.oidcClientSecretRef=dsh-oidc
             --set oauth2Proxy.cookieSecretRef=dsh-oauth2-proxy
-            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.93 )
+            --set workspace.image=ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.95 )
           INGRESS=( --set ingress.enabled=true --set ingress.host=dsh.example.com --set ingress.className=nginx )
           failed=0
           expect_fail() { # expect_fail <description> <expected-message-substring> <helm args...>

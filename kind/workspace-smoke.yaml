@@ -22,7 +22,7 @@ spec:
   containers:
     - name: sandbox-daemon
       # Must be the daemon image built from the platform tag you are testing.
-      image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.93
+      image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.95
       imagePullPolicy: IfNotPresent
       ports:
         - containerPort: 4390

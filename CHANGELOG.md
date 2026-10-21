@@ -10,14 +10,13 @@
 前缀下（如 `https://dsh.example.com/dsh/`），与同 host 的其他服务共存。root 发布仍是默认
 路径，渲染输出除 chart 版本 label 外不变。
 
-- **默认镜像 tag 对齐平台 `v0.1.93`（chart 0.1.3 → 0.1.4）**：`image.dshWeb`、
-  `workspace.image` 与 `charts/dsh-workspace` 的 daemon 引用一起提到 `v0.1.93`。该版本包含
-  0.2.1 线上的三个修复：**v0.1.89/v0.1.90 的「新建终端」不可用**
-  （`subprocess.terminalEnvironment` seam 缺失，v0.1.91 修复）、**v0.1.91 的工作区在 ensure
-  失败后可能永久停在「正在唤醒」**（v0.1.92 修复），以及 **v0.1.92 的新建终端仍在 shell 解析
-  阶段打到 loopback daemon（`sandbox daemon unreachable: fetch failed`）**（v0.1.93 修复：
-  无 cwd 的 `resolveExecutable` 与工作区根 cwd 现在路由到默认工作区）。因此 chart 不再默认
-  pin 旧 tag。root/prefix 渲染逻辑与 0.1.2 完全相同，本次只改默认 pin、文档与 CI 断言。
+- **默认镜像 tag 对齐平台 `v0.1.95`（chart 0.1.4 → 0.1.5）**：`image.dshWeb`、
+  `workspace.image` 与 `charts/dsh-workspace` 的 daemon 引用一起提到 `v0.1.95`。该版本包含
+  0.2.1 线上 terminal 链路的五个修复：`subprocess.terminalEnvironment` 缺失（v0.1.91）、
+  工作区 ensure 失败后卡在「正在唤醒」（v0.1.92）、shell 解析打到 loopback daemon
+  `fetch failed`（v0.1.93）、缺失 zsh 被当成硬错误（v0.1.94）、terminal handle 缺
+  resize/inspectActivity 导致 `this.handle.resize is not a function`（v0.1.95）。因此 chart
+  不再默认 pin 旧 tag。root/prefix 渲染逻辑与 0.1.2 完全相同，本次只改默认 pin、文档与 CI 断言。
 
 - **chart 从 `oauth2Proxy.publicOrigin` 的 path 派生全部前缀行为（单一真值）**：
   `dsh web --public-url` 保留带前缀的 root；ingress 主 Ingress 增加

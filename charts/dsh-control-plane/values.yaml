@@ -7,12 +7,13 @@ image:
   # SAME tag (see workspace.image). Bump both together on every release.
   #
   # This chart passes `dsh web --public-url`, which needs a platform image on the
-  # DSH 0.2.1 line (v0.1.93+). Earlier 0.2.1 tags are broken in ways this chart
+  # DSH 0.2.1 line (v0.1.95+). Earlier 0.2.1 tags are broken in ways this chart
   # exposes: v0.1.89/v0.1.90 miss the subprocess terminal seam, v0.1.91 can stick
-  # in waking, and v0.1.92 resolves the terminal shell against the loopback
-  # daemon ("fetch failed"). Do not pair it with an older image: that CLI does
-  # not know the flag.
-  dshWeb: ghcr.io/visecy/dsh-web-platform:v0.1.93
+  # in waking, v0.1.92 resolves the terminal shell against the loopback daemon,
+  # v0.1.93 fails shell discovery on a missing zsh, and v0.1.94 crashes on the
+  # terminal resize seam. Do not pair it with an older image: that CLI does not
+  # know the flag.
+  dshWeb: ghcr.io/visecy/dsh-web-platform:v0.1.95
   pullPolicy: IfNotPresent
 
 # dsh web listen. This chart starts the process with `--host 127.0.0.1`, points
@@ -164,7 +165,7 @@ workspace:
   # MUST be the daemon image built from the SAME platform tag as the control
   # plane: the two sides share the daemon wire protocol and there is no version
   # handshake. Bump this together with image.dshWeb on every release.
-  image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.93
+  image: ghcr.io/visecy/dsh-platform/dsh-sandbox-daemon:v0.1.95
   daemonPort: 4390
   # StorageClass for the per-workspace PVC. Empty string = the cluster's default
   # class. The platform's image default is `local-path`, which only exists on

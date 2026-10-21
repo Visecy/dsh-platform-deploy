@@ -39,7 +39,7 @@ spec:
       # authority never receives a tokenized Location) is the backstop, but
       # passing the root removes the reliance instead of stacking another guard.
       #
-      # Requires a platform image on the DSH 0.2.1 line (v0.1.93+; earlier 0.2.1 tags
+      # Requires a platform image on the DSH 0.2.1 line (v0.1.95+; earlier 0.2.1 tags
       # break the terminal or workspace lifecycle): that CLI
       # understands `--public-url`, and its identity-bridge derives the handoff
       # root from the same advertised URL. No DSH_PUBLIC_ORIGIN env is needed;
