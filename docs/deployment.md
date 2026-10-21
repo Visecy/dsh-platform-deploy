@@ -3,7 +3,7 @@
 面向运维：从零装到能用、怎么验证、怎么升级/回滚/备份，以及**必须自己补的那部分**。
 
 - 平台版本与 DSH 版本的对应关系见 dsh-platform 的 `README.md`（兼容性矩阵）。
-  本文按平台 `v0.1.92` + DSH `0.2.1-rc.2` 编写；镜像与插件版本由平台 tag 决定。
+  本文按平台 `v0.1.93` + DSH `0.2.1-rc.2` 编写；镜像与插件版本由平台 tag 决定。
 - 平台内部结构（组件、数据流、扩展点）见 dsh-platform 的 `docs/architecture.md`。
 
 ## 1. 架构
@@ -112,7 +112,7 @@ kubectl -n dsh-platform create secret generic dsh-oauth2-proxy \
 
 ```bash
 # 用与 chart 版本一致的 tag（两处必须是同一 tag：控制面与工作区 daemon 共享协议）
-TAG=v0.1.92
+TAG=v0.1.93
 
 helm upgrade --install dsh-control-plane ./charts/dsh-control-plane -n dsh-platform \
   --set image.dshWeb=ghcr.io/visecy/dsh-web-platform:${TAG} \
@@ -222,10 +222,12 @@ chart 的解析顺序（命中即止）：
 
 **镜像要求**：`--public-url` 需要 DSH 0.2.1 线（平台 `v0.1.90+`）的镜像；更早的镜像不认识
 这个 flag。子路径发布还要求同一版本线的 identity-bridge 支持带前缀的 advertised root
-（`v0.1.90` 已包含），因此同样不能配更早的镜像。**新建终端与稳定唤醒需要 `v0.1.92+`**：v0.1.89/v0.1.90 的 `@visecy/dsh-subprocess-k8s`
-缺 0.2.1 的 `terminalEnvironment()` seam，点新建终端会报
-`subprocess.terminalEnvironment is not a function`；v0.1.91 的 `workspace-k8s` 在 ensure
-失败后会永久停在「正在唤醒」（v0.1.92 修复）。chart 默认 pin 与该能力同批发布。
+（`v0.1.90` 已包含），因此同样不能配更早的镜像。**新建终端与稳定唤醒需要 `v0.1.93+`**：
+v0.1.89/v0.1.90 的 `@visecy/dsh-subprocess-k8s` 缺 0.2.1 的 `terminalEnvironment()` seam，
+点新建终端会报 `subprocess.terminalEnvironment is not a function`（v0.1.91 修复）；v0.1.91 的
+`workspace-k8s` 在 ensure 失败后会永久停在「正在唤醒」（v0.1.92 修复）；v0.1.92 的新建终端
+会在 shell 解析阶段落到 loopback daemon，报 `sandbox daemon unreachable: fetch failed`
+（v0.1.93 修复）。chart 默认 pin 与该能力同批发布。
 
 ### 4.4 子路径发布（`https://<host>/<prefix>/`）
 
